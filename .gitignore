@@ -1,0 +1,19 @@
+# Local dev data (run-supercalendar, dev-up): the database and logs.
+.data/
+
+# Nix build links and direnv.
+result
+result-*
+.direnv/
+
+# Secrets anywhere in the tree (the server reads server/.env; the release
+# key and its passwords live in release/, which ignores everything else).
+.env
+.env.*
+*.keystore
+!app/android/app/debug.keystore
+*.jks
+
+# Built apps, wherever they end up.
+*.apk
+*.aab

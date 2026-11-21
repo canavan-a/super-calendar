@@ -1,0 +1,72 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher_dark" android:roundIcon="@mipmap/ic_launcher_dark_round" android:allowBackup="true" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false" android:fullBackupContent="@xml/secure_store_backup_rules" android:dataExtractionRules="@xml/secure_store_data_extraction_rules">
+    <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode|smallestScreenSize" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:screenOrientation="portrait">
+      <!-- Calendar files and links (IcsIntentModule.kt): tapping a webcal:// link... -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="webcal"/>
+        <data android:scheme="webcals"/>
+      </intent-filter>
+      <!-- ...opening an .ics file or download... -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="content"/>
+        <data android:scheme="file"/>
+        <data android:scheme="https"/>
+        <data android:scheme="http"/>
+        <data android:mimeType="text/calendar"/>
+        <data android:mimeType="text/x-vcalendar"/>
+        <data android:mimeType="application/ics"/>
+      </intent-filter>
+      <!-- ...and the share sheet, with a file or a link. -->
+      <intent-filter>
+        <action android:name="android.intent.action.SEND"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:mimeType="text/calendar"/>
+        <data android:mimeType="text/x-vcalendar"/>
+        <data android:mimeType="application/ics"/>
+        <data android:mimeType="text/plain"/>
+      </intent-filter>
+    </activity>
+    <!-- The launcher entries. MainActivity isn't launchable by itself; there
+         is one alias per theme (src/palettes.ts), each with that theme's
+         icon (app/tools/gen-icons.mts), and exactly one is enabled at a time
+         (dark by default). AppIconModule.kt enables the one matching the
+         current theme as the app goes to the background (src/appIcon.ts). -->
+    <activity-alias android:name=".IconLight" android:targetActivity=".MainActivity" android:label="@string/app_name" android:icon="@mipmap/ic_launcher_light" android:roundIcon="@mipmap/ic_launcher_light_round" android:enabled="false" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+    <activity-alias android:name=".IconDark" android:targetActivity=".MainActivity" android:label="@string/app_name" android:icon="@mipmap/ic_launcher_dark" android:roundIcon="@mipmap/ic_launcher_dark_round" android:enabled="true" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+    <activity-alias android:name=".IconSlate" android:targetActivity=".MainActivity" android:label="@string/app_name" android:icon="@mipmap/ic_launcher_slate" android:roundIcon="@mipmap/ic_launcher_slate_round" android:enabled="false" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+    <activity-alias android:name=".IconSepia" android:targetActivity=".MainActivity" android:label="@string/app_name" android:icon="@mipmap/ic_launcher_sepia" android:roundIcon="@mipmap/ic_launcher_sepia_round" android:enabled="false" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+    <activity-alias android:name=".IconEmber" android:targetActivity=".MainActivity" android:label="@string/app_name" android:icon="@mipmap/ic_launcher_ember" android:roundIcon="@mipmap/ic_launcher_ember_round" android:enabled="false" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+  </application>
+</manifest>
