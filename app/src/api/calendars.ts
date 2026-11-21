@@ -139,6 +139,11 @@ export type OverviewItem = {
   occurrence?: string;
   flow?: Flow;
   time?: string;
+  // Training: the activity's icon and colour, and what was planned (or done).
+  icon?: string;
+  activityColor?: string;
+  distanceKm?: number;
+  durationMin?: number;
 };
 
 /** The Overview's switches by type and by layer within a type. Missing means on. */

@@ -540,3 +540,35 @@ func TestInvitesAreLimited(t *testing.T) {
 	e.mustCall(ana, "POST", "/calendars/"+cal+"/invites", map[string]string{"email": "p0@x.co"}, 201, nil)
 	e.mustCall(ana, "POST", "/calendars/"+cal+"/invites", map[string]string{"email": "one-too-many@x.co"}, 400, nil)
 }
+
+func TestOverviewShowsSessionAmounts(t *testing.T) {
+	e := newEnv(t)
+	ana := e.signUp("ana@x.co", "Ana")
+	cal := e.create(ana, "training", "Plan")
+	var types struct{ ActivityTypes []calendars.ActivityType }
+	e.mustCall(ana, "GET", "/calendars/"+cal+"/activity-types", nil, 200, &types)
+	run := types.ActivityTypes[0] // Run
+	base := "/calendars/" + cal + "/sessions"
+	var s struct{ Session calendars.Session }
+	e.mustCall(ana, "POST", base, map[string]any{"date": "2026-12-07", "activityTypeId": run.ID, "plan": map[string]any{"distanceKm": 8, "durationMin": 45}}, 201, &s)
+	e.mustCall(ana, "POST", base, map[string]any{"date": "2026-12-08", "title": "Gym", "plan": map[string]any{"durationMin": 60}}, 201, nil)
+
+	var ov struct{ Items []calendars.Item }
+	e.mustCall(ana, "GET", "/overview?from=2026-12-07&to=2026-12-09", nil, 200, &ov)
+	if len(ov.Items) != 2 {
+		t.Fatalf("items %+v", ov.Items)
+	}
+	first := ov.Items[0]
+	if first.Icon != "run" || first.DistanceKm == nil || *first.DistanceKm != 8 || first.ActivityColor != run.Color {
+		t.Fatalf("run item %+v", first)
+	}
+	if gym := ov.Items[1]; gym.Icon != "" || gym.DistanceKm != nil || gym.DurationMin == nil || *gym.DurationMin != 60 {
+		t.Fatalf("gym item %+v", gym)
+	}
+	// Once done, what was actually run is shown.
+	e.mustCall(ana, "PATCH", base+"/"+s.Session.ID, map[string]any{"status": "done", "result": map[string]any{"distanceKm": 8.4}}, 200, nil)
+	e.mustCall(ana, "GET", "/overview?from=2026-12-07&to=2026-12-08", nil, 200, &ov)
+	if d := ov.Items[0].DistanceKm; d == nil || *d != 8.4 {
+		t.Fatalf("done item distance %v", d)
+	}
+}

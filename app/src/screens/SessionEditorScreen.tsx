@@ -8,6 +8,7 @@ import { useCalendars } from '../data/CalendarsContext';
 import { DateStr, today, validTime } from '../dates';
 import { ScreenProps } from '../navigation/types';
 import { Theme, useTheme, useThemedStyles } from '../theme';
+import { activityGlyph } from '../training';
 
 const INTENSITIES = [
   { id: 'easy', label: 'Easy' },
@@ -155,7 +156,9 @@ export default function SessionEditorScreen({ navigation, route }: ScreenProps<'
               onPress={() => setTypeId(t.id)}
               style={[styles.chip, { borderColor: t.color }, t.id === typeId && { backgroundColor: t.color }]}
             >
-              <Text style={{ color: t.id === typeId ? '#fff' : theme.text, fontWeight: '600' }}>{t.name}</Text>
+              <Text style={{ color: t.id === typeId ? '#fff' : theme.text, fontWeight: '600' }}>
+                {`${activityGlyph(t.icon)} ${t.name}`.trim()}
+              </Text>
             </Pressable>
           ))}
         <Pressable onPress={() => navigation.navigate('ActivityTypes', { calendarId })} style={[styles.chip, { borderColor: theme.border }]}>

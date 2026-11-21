@@ -20,6 +20,24 @@ import { DateStr, daysCovered, formatDay, localTime, monthGrid, addDays, today, 
 import { SwitcherTitle } from '../navigation/Switcher';
 import { ScreenProps } from '../navigation/types';
 import { Theme, useThemedStyles } from '../theme';
+import { activityGlyph, amount } from '../training';
+
+// All-day items first, then by time (training sessions by their own time).
+function sortItems(items: OverviewItem[]): OverviewItem[] {
+  const key = (it: OverviewItem) =>
+    it.allDay && !it.time ? `0 ${it.kind === 'training' ? 1 : 0}` : `1 ${it.allDay ? it.time : localTime(it.start)}`;
+  return items.slice().sort((a, b) => key(a).localeCompare(key(b)));
+}
+
+// What a day cell says about an item: an event's title; a session's activity
+// icon with its distance (or time, or failing both its title).
+function chipLabel(it: OverviewItem): string {
+  if (it.kind !== 'training') return it.title;
+  const glyph = activityGlyph(it.icon);
+  const amt = amount(it.distanceKm, it.durationMin);
+  if (glyph) return `${glyph} ${amt || it.title}`;
+  return amt ? `${it.title} ${amt}` : it.title;
+}
 
 const FLOW_STRENGTH: Record<string, number> = { spotting: 0.15, light: 0.4, medium: 0.7, heavy: 1 };
 
@@ -67,7 +85,7 @@ export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) 
   const marks = useMemo(() => {
     const m: Record<DateStr, DayMarks> = {};
     const at = (d: DateStr) => (m[d] ??= {});
-    for (const it of visible) {
+    for (const it of sortItems(visible)) {
       for (const d of daysCovered(it.start, it.end, it.allDay)) {
         const mk = at(d);
         if (it.kind === 'cycle') {
@@ -75,12 +93,14 @@ export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) 
             const s = FLOW_STRENGTH[it.flow ?? 'light'] ?? 0.4;
             if (!mk.tint || mk.tint.strength < s) mk.tint = { color: it.color, strength: s };
           } else if (it.layer === 'predicted') {
+            // Ghosted: a faint fill and a dashed edge. A logged day there wins.
             mk.outline = { color: it.color, dashed: true };
+            if (!mk.tint) mk.tint = { color: it.color, strength: 0 };
           } else if (it.layer === 'fertile' && !mk.outline) {
             mk.outline = { color: it.color + '88' };
           }
         } else {
-          (mk.dots ??= []).push(it.color);
+          (mk.chips ??= []).push({ label: chipLabel(it), color: it.color, faded: it.layer === 'skipped' });
         }
       }
     }
@@ -89,9 +109,7 @@ export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) 
 
   const dayItems = useMemo(
     () =>
-      visible
-        .filter((it) => daysCovered(it.start, it.end, it.allDay).includes(selected))
-        .sort((a, b) => (a.allDay === b.allDay ? a.start.localeCompare(b.start) : a.allDay ? -1 : 1)),
+      sortItems(visible.filter((it) => daysCovered(it.start, it.end, it.allDay).includes(selected))),
     [visible, selected]
   );
 
@@ -107,7 +125,8 @@ export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) 
 
   const describe = (it: OverviewItem) => {
     if (it.kind === 'cycle') return it.layer === 'period' ? `Logged: ${it.flow}` : it.layer === 'predicted' ? 'Predicted period' : 'Fertile window (estimate)';
-    if (it.kind === 'training') return `${it.time ? it.time + ' · ' : ''}${it.layer}`;
+    if (it.kind === 'training')
+      return [it.time, amount(it.distanceKm, it.durationMin), it.layer].filter(Boolean).join(' · ');
     return it.allDay ? 'All day' : `${localTime(it.start)} – ${localTime(it.end)}`;
   };
 
@@ -128,7 +147,7 @@ export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) 
   return (
     <View style={styles.root}>
       <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={() => { refresh(); load(); }} />}>
-        <MonthGrid month={month} selected={selected} marks={marks} onSelect={setSelected} onMonthChange={(m) => { setMonth(startOfMonth(m)); }} />
+        <MonthGrid detailed month={month} selected={selected} marks={marks} onSelect={setSelected} onMonthChange={(m) => { setMonth(startOfMonth(m)); }} />
         {error ? <Muted style={{ padding: 16 }}>{error}</Muted> : null}
         <SectionTitle>{formatDay(selected, true)}</SectionTitle>
         {dayItems.length === 0 ? <Muted style={{ paddingHorizontal: 16 }}>Nothing on this day.</Muted> : null}

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ActivityField, ActivityType, PALETTE, api } from '../api/calendars';
 import { ColorPicker, Dot, ErrorText, Muted, Row, Sheet, ToggleRow } from '../components/kit';
 import { Button, TextField } from '../components/ui';
 import { ScreenProps } from '../navigation/types';
-import { Theme, useThemedStyles } from '../theme';
+import { Theme, useTheme, useThemedStyles } from '../theme';
+import { ACTIVITY_ICONS, activityGlyph } from '../training';
+import { withAlpha } from '../components/MonthGrid';
 
 const FIELDS: { id: ActivityField; label: string }[] = [
   { id: 'duration', label: 'Duration (minutes)' },
@@ -17,6 +19,7 @@ const FIELDS: { id: ActivityField; label: string }[] = [
 // fields each asks for. Shared by everyone in the calendar.
 export default function ActivityTypesScreen({ route }: ScreenProps<'ActivityTypes'>) {
   const styles = useThemedStyles(makeStyles);
+  const theme = useTheme();
   const { calendarId } = route.params;
   const [types, setTypes] = useState<ActivityType[]>([]);
   const [editing, setEditing] = useState<Partial<ActivityType> | null>(null);
@@ -31,7 +34,7 @@ export default function ActivityTypesScreen({ route }: ScreenProps<'ActivityType
     if (!editing) return;
     setError(null);
     try {
-      const body = { name: editing.name, color: editing.color, fields: editing.fields, archived: editing.archived };
+      const body = { name: editing.name, color: editing.color, icon: editing.icon, fields: editing.fields, archived: editing.archived };
       if (editing.id) await api.updateActivityType(calendarId, editing.id, body);
       else await api.createActivityType(calendarId, body);
       setEditing(null);
@@ -51,7 +54,7 @@ export default function ActivityTypesScreen({ route }: ScreenProps<'ActivityType
         {active.map((t) => (
           <Row
             key={t.id}
-            label={t.name}
+            label={`${activityGlyph(t.icon)} ${t.name}`.trim()}
             detail={t.fields.length ? FIELDS.filter((f) => t.fields.includes(f.id)).map((f) => f.label.split(' (')[0]).join(', ') : 'Nothing to plan'}
             left={<Dot color={t.color} />}
             onPress={() => setEditing(t)}
@@ -70,6 +73,25 @@ export default function ActivityTypesScreen({ route }: ScreenProps<'ActivityType
             <TextField value={editing.name} onChangeText={(name) => setEditing({ ...editing, name })} placeholder="Name" style={{ marginHorizontal: 8 }} />
             <View style={{ paddingHorizontal: 8 }}>
               <ColorPicker value={editing.color ?? ''} onChange={(color) => setEditing({ ...editing, color })} />
+            </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 8, marginBottom: 8 }}>
+              {[{ id: '', glyph: '–', label: 'None' }, ...ACTIVITY_ICONS].map((i) => (
+                <Pressable
+                  key={i.id}
+                  onPress={() => setEditing({ ...editing, icon: i.id })}
+                  accessibilityLabel={i.label}
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 10,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: (editing.icon ?? '') === i.id ? withAlpha(editing.color ?? '#888888', 0.35) : theme.surfaceAlt,
+                  }}
+                >
+                  <Text style={{ fontSize: 20, color: theme.text }}>{i.glyph}</Text>
+                </Pressable>
+              ))}
             </View>
             {FIELDS.map((f) => (
               <ToggleRow

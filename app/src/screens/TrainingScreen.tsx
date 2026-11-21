@@ -9,7 +9,7 @@ import { DateStr, addDays, formatDay, formatShort, startOfWeek, today } from '..
 import { SwitcherTitle } from '../navigation/Switcher';
 import { ScreenProps } from '../navigation/types';
 import { Theme, useTheme, useThemedStyles } from '../theme';
-import { planSummary, typeById, weekLabel } from '../training';
+import { activityGlyph, planSummary, typeById, weekLabel } from '../training';
 
 type CopyTarget = { kind: 'week' | 'day'; from: DateStr };
 
@@ -176,6 +176,7 @@ export default function TrainingScreen({ navigation, route }: ScreenProps<'Train
                         >
                           <View style={{ flex: 1 }}>
                             <Text style={[styles.cardTitle, s.status === 'skipped' && { textDecorationLine: 'line-through' }]} numberOfLines={1}>
+                              {t?.icon ? `${activityGlyph(t.icon)} ` : ''}
                               {s.time ? `${s.time} ` : ''}
                               {s.title}
                             </Text>

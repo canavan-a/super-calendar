@@ -20,3 +20,27 @@ export function weekLabel(weekStart: DateStr, planStart: DateStr | undefined, ws
 }
 
 export const typeById = (types: ActivityType[], id: string | null) => types.find((t) => t.id === id);
+
+/** Icons an activity type can have (its `icon`), shown on cards and the Overview. */
+export const ACTIVITY_ICONS: { id: string; glyph: string; label: string }[] = [
+  { id: 'run', glyph: '🏃', label: 'Run' },
+  { id: 'bike', glyph: '🚴', label: 'Ride' },
+  { id: 'swim', glyph: '🏊', label: 'Swim' },
+  { id: 'lift', glyph: '🏋️', label: 'Strength' },
+  { id: 'stretch', glyph: '🧘', label: 'Mobility' },
+  { id: 'walk', glyph: '🚶', label: 'Walk' },
+  { id: 'hike', glyph: '🥾', label: 'Hike' },
+  { id: 'row', glyph: '🚣', label: 'Row' },
+  { id: 'climb', glyph: '🧗', label: 'Climb' },
+  { id: 'ball', glyph: '⚽', label: 'Sport' },
+  { id: 'rest', glyph: '💤', label: 'Rest' },
+];
+
+export const activityGlyph = (icon: string | undefined) => ACTIVITY_ICONS.find((i) => i.id === icon)?.glyph ?? '';
+
+/** A session's amount in a few characters: distance if there is one, else time. */
+export function amount(distanceKm?: number, durationMin?: number): string {
+  if (distanceKm) return `${Math.round(distanceKm * 10) / 10} km`;
+  if (durationMin) return durationMin >= 60 && durationMin % 60 === 0 ? `${durationMin / 60} h` : `${durationMin} min`;
+  return '';
+}

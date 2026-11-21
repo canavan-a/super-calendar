@@ -2,6 +2,7 @@ package calendars
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/canavan-a/super-calendar/server/internal/cycle"
@@ -27,6 +28,13 @@ type Item struct {
 	Occurrence string `json:"occurrence,omitempty"` // for a recurring event
 	Flow       string `json:"flow,omitempty"`       // cycle: the logged flow
 	Time       string `json:"time,omitempty"`       // training: HH:MM
+	// Training: the activity's icon and colour, and the distance and
+	// duration (what was done, for a done session with a result; else the
+	// plan), so the Overview can show "run 8 km" without opening it.
+	Icon          string   `json:"icon,omitempty"`
+	ActivityColor string   `json:"activityColor,omitempty"`
+	DistanceKm    *float64 `json:"distanceKm,omitempty"`
+	DurationMin   *float64 `json:"durationMin,omitempty"`
 }
 
 // adapter turns one kind's data in a range into Overview items. A new kind
@@ -95,12 +103,29 @@ func trainingItems(ctx context.Context, s *Service, cals []*Calendar, r Range) (
 	if err != nil {
 		return nil, err
 	}
+	types := map[string]ActivityType{}
+	for _, c := range cals {
+		list, err := s.ActivityTypes(ctx, c.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range list {
+			types[t.ID] = t
+		}
+	}
 	out := make([]Item, 0, len(sessions))
 	for _, t := range sessions {
 		d, _ := time.Parse(dateLayout, t.Date)
-		out = append(out, Item{CalendarID: t.CalendarID, Kind: Training, Layer: t.Status, AllDay: true,
+		it := Item{CalendarID: t.CalendarID, Kind: Training, Layer: t.Status, AllDay: true,
 			Start: t.Date, End: d.AddDate(0, 0, 1).Format(dateLayout), Title: t.Title,
-			Color: byID[t.CalendarID].DisplayColor(), RefID: t.ID, Time: t.Time})
+			Color: byID[t.CalendarID].DisplayColor(), RefID: t.ID, Time: t.Time}
+		if t.ActivityTypeID != nil {
+			if at, ok := types[*t.ActivityTypeID]; ok {
+				it.Icon, it.ActivityColor = at.Icon, at.Color
+			}
+		}
+		it.DistanceKm, it.DurationMin = sessionAmounts(t)
+		out = append(out, it)
 	}
 	return out, nil
 }
@@ -150,4 +175,20 @@ func cycleItems(ctx context.Context, s *Service, cals []*Calendar, r Range) ([]I
 		}
 	}
 	return out, nil
+}
+
+// sessionAmounts is a session's distance and duration: what was done, if it's
+// done and the result says, otherwise what was planned.
+func sessionAmounts(t Session) (distance, duration *float64) {
+	var plan, result struct {
+		DistanceKm  *float64 `json:"distanceKm"`
+		DurationMin *float64 `json:"durationMin"`
+	}
+	_ = json.Unmarshal(t.Plan, &plan)
+	_ = json.Unmarshal(t.Result, &result)
+	distance, duration = plan.DistanceKm, plan.DurationMin
+	if t.Status == "done" && (result.DistanceKm != nil || result.DurationMin != nil) {
+		distance, duration = result.DistanceKm, result.DurationMin
+	}
+	return distance, duration
 }

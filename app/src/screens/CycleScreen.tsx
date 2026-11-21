@@ -66,7 +66,8 @@ export default function CycleScreen({ navigation, route }: ScreenProps<'Cycle'>)
           }
         }
         for (let d = p.start; d <= p.end; d = addDays(d, 1)) {
-          if (d >= summary.today) (m[d] ??= {}).outline = { color, dashed: true };
+          // Ghosted: a faint fill and a dashed edge (a logged day below wins).
+          if (d >= summary.today) m[d] = { ...m[d], outline: { color, dashed: true }, tint: { color, strength: 0 } };
         }
       }
     }
@@ -109,7 +110,7 @@ export default function CycleScreen({ navigation, route }: ScreenProps<'Cycle'>)
         <View style={styles.legend}>
           <View style={[styles.swatch, { backgroundColor: withAlpha(color, 0.7) }]} />
           <Muted style={{ fontSize: 12 }}>Logged</Muted>
-          <View style={[styles.swatch, { borderColor: color, borderWidth: 2, borderStyle: 'dashed' }]} />
+          <View style={[styles.swatch, { borderColor: color, borderWidth: 2, borderStyle: 'dashed', backgroundColor: withAlpha(color, 0.15) }]} />
           <Muted style={{ fontSize: 12 }}>Predicted</Muted>
           {showFertile ? (
             <>
