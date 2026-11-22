@@ -176,3 +176,21 @@ func TestBacktestSynthetic(t *testing.T) {
 		t.Fatalf("regular history mae %.2f", mae)
 	}
 }
+
+func TestOngoingPeriodExpectsTheRest(t *testing.T) {
+	// Three finished 5-day periods, then day 2 of the current one.
+	logged := append(history("2026-01-01", "2026-01-29", "2026-02-26"), period("2026-03-26", 2)...)
+	s := Summarize(logged, d("2026-03-27"))
+	if s.Ongoing == nil || ds(s.Ongoing.Start) != "2026-03-28" || ds(s.Ongoing.End) != "2026-03-30" {
+		t.Fatalf("ongoing %+v", s.Ongoing)
+	}
+	// Nothing logged for two days: it's over, nothing more is expected.
+	if s := Summarize(logged, d("2026-03-29")); s.Ongoing != nil {
+		t.Fatalf("stale period still ongoing: %+v", s.Ongoing)
+	}
+	// Already as long as usual: nothing more expected either.
+	full := append(history("2026-01-01", "2026-01-29", "2026-02-26"), period("2026-03-26", 5)...)
+	if s := Summarize(full, d("2026-03-30")); s.Ongoing != nil {
+		t.Fatalf("full-length period still ongoing: %+v", s.Ongoing)
+	}
+}

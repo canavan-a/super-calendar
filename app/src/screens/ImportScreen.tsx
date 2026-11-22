@@ -52,7 +52,7 @@ export default function ImportScreen({ navigation, route }: ScreenProps<'Import'
     setError(null);
     try {
       setResult(await api.importIcs(calendarId, source));
-      bump();
+      bump(calendarId);
     } catch (e: any) {
       setError(e.message);
     } finally {

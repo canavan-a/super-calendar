@@ -239,6 +239,8 @@ type SessionInput struct {
 	Notes          *string          `json:"notes"`
 	Status         *string          `json:"status"`
 	Result         *json.RawMessage `json:"result"`
+	// BaseUpdatedAt: as for events, refuse to overwrite someone else's save.
+	BaseUpdatedAt *string `json:"baseUpdatedAt"`
 }
 
 var hhmm = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
@@ -371,6 +373,9 @@ func (s *Service) UpdateSession(ctx context.Context, calendarID, sessionID, user
 	t, err := s.GetSession(ctx, calendarID, sessionID)
 	if err != nil {
 		return nil, err
+	}
+	if stale(in.BaseUpdatedAt, t.UpdatedAt) {
+		return nil, &ConflictError{Current: t, By: t.UpdatedBy}
 	}
 	movedDay := in.Date != nil && *in.Date != t.Date
 	if err := s.applySession(ctx, t, in); err != nil {

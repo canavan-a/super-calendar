@@ -90,6 +90,12 @@ type PredictionJSON struct {
 	FertileEnd   string `json:"fertileEnd"`
 }
 
+// SpanJSON is a run of dates, both ends included.
+type SpanJSON struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
 type CycleSummary struct {
 	Today        string           `json:"today"`
 	Periods      []PeriodJSON     `json:"periods"`
@@ -102,6 +108,8 @@ type CycleSummary struct {
 	Irregular    bool             `json:"irregular"`
 	Predictions  []PredictionJSON `json:"predictions"`
 	LateDays     int              `json:"lateDays"`
+	// The rest of a period under way, as expected (both ends included).
+	Ongoing *SpanJSON `json:"ongoing"`
 }
 
 func f(t time.Time) string { return t.Format(dateLayout) }
@@ -130,6 +138,9 @@ func (s *Service) summarize(logged []CycleDay, loc *time.Location) *CycleSummary
 		Today: f(today), Periods: []PeriodJSON{}, Cycles: []CycleJSON{}, Predictions: []PredictionJSON{},
 		Enough: sum.Enough, NeedPeriods: sum.NeedPeriods, MeanCycle: round1(sum.MeanCycle), SDCycle: round1(sum.SDCycle),
 		PeriodLength: sum.PeriodLength, Irregular: sum.Irregular, LateDays: sum.LateDays,
+	}
+	if sum.Ongoing != nil {
+		out.Ongoing = &SpanJSON{Start: f(sum.Ongoing.Start), End: f(sum.Ongoing.End)}
 	}
 	for _, p := range sum.Periods {
 		out.Periods = append(out.Periods, PeriodJSON{Start: f(p.Start), End: f(p.End), Length: p.Length})

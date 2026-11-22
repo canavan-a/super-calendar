@@ -55,28 +55,30 @@ func ParseRange(from, to, tz string) (Range, error) {
 }
 
 type Event struct {
-	ID           string   `json:"id"`
-	CalendarID   string   `json:"calendarId"`
-	UID          string   `json:"uid"`
-	RecurrenceID string   `json:"recurrenceId"`
-	Title        string   `json:"title"`
-	Description  string   `json:"description"`
-	Location     string   `json:"location"`
-	URL          string   `json:"url"`
-	AllDay       bool     `json:"allDay"`
-	Start        string   `json:"start"`
-	End          string   `json:"end"`
-	TZID         string   `json:"tzid"`
-	RRule        string   `json:"rrule"`
-	ExDates      []string `json:"exdates"`
-	Cancelled    bool     `json:"cancelled"`
-	Source       string   `json:"source"`
-	UpdatedBy    string   `json:"updatedBy"`
-	UpdatedAt    string   `json:"updatedAt"`
+	ID           string `json:"id"`
+	CalendarID   string `json:"calendarId"`
+	UID          string `json:"uid"`
+	RecurrenceID string `json:"recurrenceId"`
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	Location     string `json:"location"`
+	URL          string `json:"url"`
+	// Color is the event's own colour, or "" for its calendar's.
+	Color     string   `json:"color"`
+	AllDay    bool     `json:"allDay"`
+	Start     string   `json:"start"`
+	End       string   `json:"end"`
+	TZID      string   `json:"tzid"`
+	RRule     string   `json:"rrule"`
+	ExDates   []string `json:"exdates"`
+	Cancelled bool     `json:"cancelled"`
+	Source    string   `json:"source"`
+	UpdatedBy string   `json:"updatedBy"`
+	UpdatedAt string   `json:"updatedAt"`
 }
 
 const eventCols = `e.id, e.calendar_id, e.uid, e.recurrence_id, e.title, e.description, e.location, e.url,
-	e.all_day, e.start, e.end, e.tzid, e.rrule, e.exdates, e.cancelled, e.source,
+	e.all_day, e.start, e.end, e.tzid, e.rrule, e.exdates, e.cancelled, e.source, e.color,
 	COALESCE(u.display_name, ''), e.updated_at`
 
 const eventFrom = ` FROM events e LEFT JOIN users u ON u.id = e.updated_by `
@@ -85,7 +87,7 @@ func scanEvent(row interface{ Scan(...any) error }) (*Event, error) {
 	var e Event
 	var exdates string
 	if err := row.Scan(&e.ID, &e.CalendarID, &e.UID, &e.RecurrenceID, &e.Title, &e.Description, &e.Location, &e.URL,
-		&e.AllDay, &e.Start, &e.End, &e.TZID, &e.RRule, &exdates, &e.Cancelled, &e.Source, &e.UpdatedBy, &e.UpdatedAt); err != nil {
+		&e.AllDay, &e.Start, &e.End, &e.TZID, &e.RRule, &exdates, &e.Cancelled, &e.Source, &e.Color, &e.UpdatedBy, &e.UpdatedAt); err != nil {
 		return nil, err
 	}
 	e.ExDates = []string{}
@@ -126,11 +128,17 @@ type EventInput struct {
 	Description *string `json:"description"`
 	Location    *string `json:"location"`
 	URL         *string `json:"url"`
+	Color       *string `json:"color"` // "" uses the calendar's
 	AllDay      *bool   `json:"allDay"`
 	Start       *string `json:"start"`
 	End         *string `json:"end"`
 	TZID        *string `json:"tzid"`
 	RRule       *string `json:"rrule"`
+	// BaseUpdatedAt is the updatedAt the editor loaded: if the event has been
+	// saved since (by someone else), the update is refused with a
+	// ConflictError instead of overwriting their change. Leave it out to
+	// overwrite anyway.
+	BaseUpdatedAt *string `json:"baseUpdatedAt"`
 }
 
 func (in EventInput) apply(e *Event) error {
@@ -143,6 +151,7 @@ func (in EventInput) apply(e *Event) error {
 	set(&e.Description, in.Description)
 	set(&e.Location, in.Location)
 	set(&e.URL, in.URL)
+	set(&e.Color, in.Color)
 	set(&e.Start, in.Start)
 	set(&e.End, in.End)
 	set(&e.TZID, in.TZID)
@@ -161,6 +170,9 @@ func normalizeEvent(e *Event) error {
 	}
 	if len(e.Title) > 300 || len(e.Description) > 20000 || len(e.Location) > 500 || len(e.URL) > 2000 {
 		return invalid("some of the event's text is too long")
+	}
+	if e.Color != "" && !colorRe.MatchString(e.Color) {
+		return invalid("colour must look like #a1b2c3")
 	}
 	if e.TZID == "" {
 		e.TZID = "UTC"
@@ -226,19 +238,19 @@ func (s *Service) insertEvent(ctx context.Context, q execer, e *Event, userID st
 	exdates, _ := json.Marshal(e.ExDates)
 	now := stamp(s.now())
 	_, err := q.ExecContext(ctx, `INSERT INTO events (id, calendar_id, uid, recurrence_id, title, description, location, url,
-		all_day, start, end, tzid, rrule, exdates, cancelled, source, created_by, updated_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		all_day, start, end, tzid, rrule, exdates, cancelled, source, color, created_by, updated_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, e.CalendarID, e.UID, e.RecurrenceID, e.Title, e.Description, e.Location, e.URL,
-		e.AllDay, e.Start, e.End, e.TZID, e.RRule, string(exdates), e.Cancelled, e.Source, userID, userID, now, now)
+		e.AllDay, e.Start, e.End, e.TZID, e.RRule, string(exdates), e.Cancelled, e.Source, e.Color, userID, userID, now, now)
 	return err
 }
 
 func (s *Service) saveEvent(ctx context.Context, q execer, e *Event, userID string) error {
 	exdates, _ := json.Marshal(e.ExDates)
 	_, err := q.ExecContext(ctx, `UPDATE events SET title = ?, description = ?, location = ?, url = ?, all_day = ?,
-		start = ?, end = ?, tzid = ?, rrule = ?, exdates = ?, cancelled = ?, updated_by = ?, updated_at = ?
+		start = ?, end = ?, tzid = ?, rrule = ?, exdates = ?, cancelled = ?, color = ?, updated_by = ?, updated_at = ?
 		WHERE id = ?`, e.Title, e.Description, e.Location, e.URL, e.AllDay, e.Start, e.End, e.TZID, e.RRule,
-		string(exdates), e.Cancelled, userID, stamp(s.now()), e.ID)
+		string(exdates), e.Cancelled, e.Color, userID, stamp(s.now()), e.ID)
 	return err
 }
 
@@ -265,6 +277,9 @@ func (s *Service) UpdateEvent(ctx context.Context, calendarID, eventID, userID, 
 	e, err := s.GetEvent(ctx, calendarID, eventID)
 	if err != nil {
 		return nil, err
+	}
+	if stale(in.BaseUpdatedAt, e.UpdatedAt) {
+		return nil, &ConflictError{Current: e, By: e.UpdatedBy}
 	}
 	if occurrence == "" || e.RRule == "" {
 		before := *e
@@ -392,6 +407,7 @@ type Occurrence struct {
 	Recurring  bool   `json:"recurring"`
 	Title      string `json:"title"`
 	Location   string `json:"location"`
+	Color      string `json:"color"` // the event's own, or ""
 	AllDay     bool   `json:"allDay"`
 	Start      string `json:"start"`
 	End        string `json:"end"`
@@ -448,7 +464,7 @@ func (s *Service) Occurrences(ctx context.Context, calendarIDs []string, r Range
 
 func occ(e *Event, id, occurrence string, recurring bool, start, end string) Occurrence {
 	return Occurrence{EventID: id, CalendarID: e.CalendarID, Occurrence: occurrence, Recurring: recurring,
-		Title: e.Title, Location: e.Location, AllDay: e.AllDay, Start: start, End: end}
+		Title: e.Title, Location: e.Location, Color: e.Color, AllDay: e.AllDay, Start: start, End: end}
 }
 
 func overlaps(allDay bool, start, end string, r Range) bool {

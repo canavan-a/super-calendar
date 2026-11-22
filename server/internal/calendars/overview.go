@@ -91,7 +91,7 @@ func generalItems(ctx context.Context, s *Service, cals []*Calendar, r Range) ([
 	out := make([]Item, 0, len(occs))
 	for _, o := range occs {
 		out = append(out, Item{CalendarID: o.CalendarID, Kind: General, Layer: "event", AllDay: o.AllDay,
-			Start: o.Start, End: o.End, Title: o.Title, Color: byID[o.CalendarID].DisplayColor(),
+			Start: o.Start, End: o.End, Title: o.Title, Color: eventColor(o.Color, byID[o.CalendarID]),
 			RefID: o.EventID, Occurrence: o.Occurrence})
 	}
 	return out, nil
@@ -151,6 +151,13 @@ func cycleItems(ctx context.Context, s *Service, cals []*Calendar, r Range) ([]I
 				Start: d.Date, End: day(t.AddDate(0, 0, 1)), Title: c.Name, Color: color, Flow: d.Flow})
 		}
 		sum := s.summarize(logged, r.Loc)
+		if o := sum.Ongoing; o != nil {
+			end, _ := time.Parse(dateLayout, o.End)
+			if inRange(o.Start, day(end.AddDate(0, 0, 1))) {
+				out = append(out, Item{CalendarID: c.ID, Kind: Cycle, Layer: "predicted", AllDay: true,
+					Start: o.Start, End: day(end.AddDate(0, 0, 1)), Title: c.Name + " (period, expected)", Color: color})
+			}
+		}
 		for _, p := range sum.Predictions {
 			start, _ := time.Parse(dateLayout, p.Start)
 			end, _ := time.Parse(dateLayout, p.End)
@@ -191,4 +198,13 @@ func sessionAmounts(t Session) (distance, duration *float64) {
 		distance, duration = result.DistanceKm, result.DurationMin
 	}
 	return distance, duration
+}
+
+// eventColor is an event's own colour, or else the calendar's as this member
+// sees it.
+func eventColor(own string, c *Calendar) string {
+	if own != "" {
+		return own
+	}
+	return c.DisplayColor()
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/canavan-a/super-calendar/server/internal/auth"
 	"github.com/canavan-a/super-calendar/server/internal/httpx"
+	"github.com/canavan-a/super-calendar/server/internal/live"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -32,7 +33,12 @@ func calendarFrom(r *http.Request) *Calendar {
 // not yours), 500 otherwise.
 func fail(w http.ResponseWriter, err error) {
 	var inv *InvalidError
+	var conflict *ConflictError
 	switch {
+	case errors.As(err, &conflict):
+		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
+			"error": "changed by someone else", "conflict": true, "by": conflict.By, "current": conflict.Current,
+		})
 	case errors.As(err, &inv):
 		httpx.WriteError(w, http.StatusBadRequest, inv.Msg)
 	case errors.Is(err, ErrNotFound):
@@ -84,6 +90,7 @@ func (h *Handlers) Routes(r chi.Router) {
 
 	r.Route("/calendars/{calendarID}", func(r chi.Router) {
 		r.Use(h.RequireMember)
+		r.Use(h.Notify)
 		r.Get("/", h.get)
 		r.Patch("/", h.update)
 		r.Patch("/me", h.updateMine)
@@ -146,6 +153,7 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	h.s.toSelf(r, "calendars")
 	httpx.WriteJSON(w, http.StatusCreated, map[string]any{"calendar": c})
 }
 
@@ -160,6 +168,7 @@ func (h *Handlers) reorder(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	h.s.toSelf(r, "calendars")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -263,6 +272,13 @@ func (h *Handlers) respond(accept bool) http.HandlerFunc {
 			fail(w, err)
 			return
 		}
+		h.s.toSelf(r, "inbox")
+		if c != nil {
+			h.s.toSelf(r, "calendars")
+			me := userID(r)
+			h.s.send(h.s.memberIDs(r.Context(), c.ID), live.Message{Type: "changed", CalendarID: c.ID, Area: "members",
+				By: me, ByName: h.s.displayName(r.Context(), me), Origin: origin(r)})
+		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{"calendar": c})
 	}
 }
@@ -287,6 +303,7 @@ func (h *Handlers) putSettings(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	h.s.toSelf(r, "calendars")
 	w.WriteHeader(http.StatusNoContent)
 }
 

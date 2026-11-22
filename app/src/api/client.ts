@@ -4,6 +4,10 @@ import { tokenStore } from './tokenStore';
 export const API_BASE_URL = apiUrl;
 export const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws');
 
+// This launch of the app, sent with every request so the live socket
+// (src/live.tsx) can tell our own changes from other people's.
+export const LIVE_CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+
 // The session token from sign-in. It doesn't expire while the app is in use
 // (the server slides its expiry forward), so there's no refresh step: a 401
 // only ever means the session was ended for real.
@@ -36,6 +40,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'X-Live-Client': LIVE_CLIENT_ID,
       ...init.headers,
     },
   });

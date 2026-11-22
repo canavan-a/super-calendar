@@ -388,8 +388,17 @@ GET /overview?from&to
 
 **Status (2026-11-20):** phases 1–5 are built: server with tests
 (`go test ./...`), app typechecks, bundles and builds
-(`assembleSideloadDebug`). Not yet run on a phone or emulator. Left: phase 6,
-plus drag-to-reorder sessions (sessions keep the order they were added in).
+(`assembleSideloadDebug`). Not yet run on a phone or emulator. Left: drag-to-reorder sessions (sessions
+keep the order they were added in), and the rest of phase 6 (notifications,
+ICS subscriptions and export feeds).
+
+**Live updates (built, 2026-11-21):** one WebSocket per open app (`GET /live`,
+`server/internal/live`); after any change in a calendar its members' apps are
+told what changed (never the data) and refetch that calendar. Event and
+session saves carry the version the editor loaded, so a save over someone
+else's newer one is refused (409) and the app asks "keep theirs or
+overwrite"; an open editor also shows a banner when someone saves the same
+item. Cycle days stay last-write-wins.
 
 Each phase ends usable and released (`app-v0.x`).
 

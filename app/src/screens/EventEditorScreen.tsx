@@ -1,12 +1,15 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { CalEvent, EventInput, api } from '../api/calendars';
+import { CalEvent, EventInput, api, displayColor } from '../api/calendars';
 import { DateField } from '../components/DateField';
-import { ErrorText, HeaderButton, Muted, Row, SectionTitle, ToggleRow } from '../components/kit';
+import { ColorPicker, Dot, ErrorText, HeaderButton, Muted, Row, SectionTitle, ToggleRow } from '../components/kit';
 import { TextField } from '../components/ui';
-import { useCalendars } from '../data/CalendarsContext';
+import { useCalendar, useCalendars } from '../data/CalendarsContext';
 import { DateStr, addDays, diffDays, localDate, localTime, timeZone, toInstant, today, validTime } from '../dates';
 import { ScreenProps } from '../navigation/types';
+import { ChangedBanner } from '../components/ChangedBanner';
+import { useLiveChanges } from '../live';
+import { ApiError } from '../api/client';
 import { Theme, useTheme, useThemedStyles } from '../theme';
 
 const REPEATS = [
@@ -29,6 +32,7 @@ type Form = {
   rrule: string;
   location: string;
   description: string;
+  color: string; // '' = the calendar's
 };
 
 function formFromEvent(e: CalEvent, occurrence?: string): Form {
@@ -53,6 +57,7 @@ function formFromEvent(e: CalEvent, occurrence?: string): Form {
     rrule: e.rrule,
     location: e.location,
     description: e.description,
+    color: e.color ?? '',
   };
 }
 
@@ -61,6 +66,7 @@ export default function EventEditorScreen({ navigation, route }: ScreenProps<'Ev
   const theme = useTheme();
   const { calendarId, eventId, occurrence } = route.params;
   const { bump } = useCalendars();
+  const cal = useCalendar(calendarId);
   const [event, setEvent] = useState<CalEvent | null>(null);
   const [form, setForm] = useState<Form | null>(
     eventId
@@ -75,6 +81,7 @@ export default function EventEditorScreen({ navigation, route }: ScreenProps<'Ev
           rrule: '',
           location: '',
           description: '',
+          color: '',
         }
   );
   const [custom, setCustom] = useState(false);
@@ -100,12 +107,12 @@ export default function EventEditorScreen({ navigation, route }: ScreenProps<'Ev
     if (!f.allDay && (!validTime(f.startTime) || !validTime(f.endTime))) return 'Times look like 09:30';
     if (f.allDay) {
       if (f.endDate < f.startDate) return 'It ends before it starts';
-      return { title: f.title, allDay: true, start: f.startDate, end: addDays(f.endDate, 1), location: f.location, description: f.description, rrule: f.rrule, tzid: timeZone() };
+      return { title: f.title, allDay: true, start: f.startDate, end: addDays(f.endDate, 1), location: f.location, description: f.description, color: f.color, rrule: f.rrule, tzid: timeZone() };
     }
     const start = toInstant(f.startDate, f.startTime);
     const end = toInstant(f.endDate, f.endTime);
     if (end < start) return 'It ends before it starts';
-    return { title: f.title, allDay: false, start, end, location: f.location, description: f.description, rrule: f.rrule, tzid: event?.tzid && event.tzid !== 'UTC' ? event.tzid : timeZone() };
+    return { title: f.title, allDay: false, start, end, location: f.location, description: f.description, color: f.color, rrule: f.rrule, tzid: event?.tzid && event.tzid !== 'UTC' ? event.tzid : timeZone() };
   };
 
   // "All events": keep the series' first date, take the new times and length.
@@ -114,17 +121,43 @@ export default function EventEditorScreen({ navigation, route }: ScreenProps<'Ev
     return { ...f, startDate: first, endDate: addDays(first, diffDays(f.startDate, f.endDate)) };
   };
 
-  const run = async (fn: () => Promise<unknown>) => {
+  // Saves send the version this editor loaded (base); if someone saved in
+  // between, the server refuses with their version, and this asks whether to
+  // keep theirs or overwrite. null base overwrites.
+  const run = async (fn: (base?: string) => Promise<unknown>, base: string | null = event?.updatedAt ?? null) => {
     setSaving(true);
     setError(null);
     try {
-      await fn();
-      bump();
+      await fn(base ?? undefined);
+      bump(calendarId);
       navigation.goBack();
     } catch (e: any) {
-      setError(e.message);
       setSaving(false);
+      if (e instanceof ApiError && e.status === 409 && e.body?.conflict) {
+        const current = e.body.current as CalEvent;
+        Alert.alert(`${e.body.by || 'Someone'} changed this`, 'They saved it while you were editing. Keep their version, or overwrite it with yours?', [
+          { text: 'Keep theirs', onPress: () => loadTheirs(current) },
+          { text: 'Overwrite', style: 'destructive', onPress: () => run(fn, null) },
+        ]);
+        return;
+      }
+      setError(e.message);
     }
+  };
+
+  // Someone else saved this event while it's open here (live updates).
+  const [remote, setRemote] = useState<string | null>(null);
+  useLiveChanges(calendarId, (c) => {
+    if (eventId && c.itemId === eventId) setRemote(c.byName || 'Someone');
+  });
+  const loadTheirs = (current?: CalEvent) => {
+    setRemote(null);
+    const apply = (e: CalEvent) => {
+      setEvent(e);
+      setForm(formFromEvent(e, occurrence));
+    };
+    if (current) apply(current);
+    else if (eventId) api.getEvent(calendarId, eventId).then(apply).catch((e) => setError(e.message));
   };
 
   const save = () => {
@@ -132,15 +165,15 @@ export default function EventEditorScreen({ navigation, route }: ScreenProps<'Ev
     const body = input(form);
     if (typeof body === 'string') return setError(body);
     if (!eventId) return run(() => api.createEvent(calendarId, body));
-    if (!series || !event) return run(() => api.updateEvent(calendarId, eventId, body));
+    if (!series || !event) return run((base) => api.updateEvent(calendarId, eventId, { ...body, baseUpdatedAt: base }));
     Alert.alert('Change which?', 'This is a repeating event.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Only this one', onPress: () => run(() => api.updateEvent(calendarId, eventId, { ...body, rrule: undefined }, occurrence)) },
+      { text: 'Only this one', onPress: () => run((base) => api.updateEvent(calendarId, eventId, { ...body, rrule: undefined, baseUpdatedAt: base }, occurrence)) },
       {
         text: 'All of them',
         onPress: () => {
           const all = input(rebaseOnSeries(form, event));
-          if (typeof all !== 'string') run(() => api.updateEvent(calendarId, eventId, all));
+          if (typeof all !== 'string') run((base) => api.updateEvent(calendarId, eventId, { ...all, baseUpdatedAt: base }));
         },
       },
     ]);
@@ -180,6 +213,7 @@ export default function EventEditorScreen({ navigation, route }: ScreenProps<'Ev
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ padding: 16, paddingBottom: 60, gap: 10 }} keyboardShouldPersistTaps="handled">
       <ErrorText error={error} />
+      {remote ? <ChangedBanner name={remote} onLoad={() => loadTheirs()} /> : null}
       <TextField value={form.title} onChangeText={(t) => set({ title: t })} placeholder="Title" autoFocus={!eventId} />
       <ToggleRow label="All day" value={form.allDay} onChange={(v) => set({ allDay: v })} />
       <Text style={styles.label}>Starts</Text>
@@ -220,6 +254,15 @@ export default function EventEditorScreen({ navigation, route }: ScreenProps<'Ev
           <Muted style={{ fontSize: 13 }}>An iCalendar RRULE, as calendar files use.</Muted>
         </>
       ) : null}
+
+      <SectionTitle>Colour</SectionTitle>
+      <Row
+        label={`Calendar's colour${cal ? ` (${cal.name})` : ''}`}
+        left={<Dot color={cal ? displayColor(cal) : theme.textMuted} />}
+        right={<Text style={{ color: theme.primary }}>{form.color ? '○' : '●'}</Text>}
+        onPress={() => set({ color: '' })}
+      />
+      <ColorPicker value={form.color} onChange={(c) => set({ color: c })} />
 
       <SectionTitle>Details</SectionTitle>
       <TextField value={form.location} onChangeText={(t) => set({ location: t })} placeholder="Location" />

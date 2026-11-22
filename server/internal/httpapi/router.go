@@ -7,6 +7,7 @@ import (
 	"github.com/canavan-a/super-calendar/server/internal/auth"
 	"github.com/canavan-a/super-calendar/server/internal/calendars"
 	"github.com/canavan-a/super-calendar/server/internal/config"
+	"github.com/canavan-a/super-calendar/server/internal/live"
 	"github.com/canavan-a/super-calendar/server/internal/ratelimit"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -17,6 +18,8 @@ type Deps struct {
 	AuthService  *auth.Service
 	AuthHandlers *auth.Handlers
 	Calendars    *calendars.Handlers
+	// Live is where change notifications go out (GET /live).
+	Live *live.Hub
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -62,6 +65,11 @@ func NewRouter(d Deps) http.Handler {
 		r.Delete("/me", d.AuthHandlers.DeleteMe)
 		r.Post("/auth/logout", d.AuthHandlers.Logout)
 
+		// The live socket: what changed, so open apps refetch (internal/live).
+		r.Get("/live", func(w http.ResponseWriter, r *http.Request) {
+			id, _ := auth.UserIDFromContext(r.Context())
+			d.Live.Serve(w, r, id)
+		})
 		d.Calendars.Routes(r)
 	})
 

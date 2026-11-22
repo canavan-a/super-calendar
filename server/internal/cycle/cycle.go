@@ -92,6 +92,15 @@ type Summary struct {
 	Irregular    bool
 	Predictions  []Prediction
 	LateDays     int
+	// Ongoing is set while a period is under way (bleeding logged today or
+	// yesterday) and not yet as long as a typical one: the days after the
+	// last one logged that it's expected to go on for.
+	Ongoing *Span
+}
+
+// Span is a run of days, both ends included.
+type Span struct {
+	Start, End time.Time
 }
 
 func days(a, b time.Time) int { return int(math.Round(b.Sub(a).Hours() / 24)) }
@@ -154,6 +163,13 @@ func Summarize(logged []Day, today time.Time) Summary {
 
 func summarize(periods []Period, today time.Time) Summary {
 	s := Summary{Periods: periods, Cycles: Cycles(periods), PeriodLength: periodLength(periods, today)}
+	if n := len(periods); n > 0 {
+		last := periods[n-1]
+		expectedEnd := addDays(last.Start, s.PeriodLength-1)
+		if days(last.End, today) <= 1 && expectedEnd.After(last.End) {
+			s.Ongoing = &Span{Start: addDays(last.End, 1), End: expectedEnd}
+		}
+	}
 
 	var usable []int
 	for _, c := range s.Cycles {

@@ -19,9 +19,13 @@ type State = {
   upsert: (c: Calendar) => void;
   remove: (id: string) => void;
   setSettings: (s: UserSettings) => void;
-  /** Bumped whenever calendar contents may have changed, so open screens reload. */
+  /** Bumped whenever any calendar's contents may have changed (the Overview reloads). */
   version: number;
-  bump: () => void;
+  /** Per calendar: bumped when that one changed, or on a full refresh (its screen reloads). */
+  calendarVersions: Record<string, number>;
+  epoch: number;
+  /** Something changed: in calendarId, or (without one) possibly anywhere. */
+  bump: (calendarId?: string) => void;
 };
 
 const Ctx = createContext<State | null>(null);
@@ -37,7 +41,13 @@ export function CalendarsProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettingsState] = useState<UserSettings>({});
   const [loaded, setLoaded] = useState(false);
   const [version, setVersion] = useState(0);
-  const bump = useCallback(() => setVersion((v) => v + 1), []);
+  const [epoch, setEpoch] = useState(0);
+  const [calendarVersions, setCalendarVersions] = useState<Record<string, number>>({});
+  const bump = useCallback((calendarId?: string) => {
+    setVersion((v) => v + 1);
+    if (calendarId) setCalendarVersions((m) => ({ ...m, [calendarId]: (m[calendarId] ?? 0) + 1 }));
+    else setEpoch((e) => e + 1);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -97,8 +107,8 @@ export function CalendarsProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ calendars, invites, settings, loaded, refresh, upsert, remove, setSettings, version, bump }),
-    [calendars, invites, settings, loaded, refresh, upsert, remove, setSettings, version, bump]
+    () => ({ calendars, invites, settings, loaded, refresh, upsert, remove, setSettings, version, calendarVersions, epoch, bump }),
+    [calendars, invites, settings, loaded, refresh, upsert, remove, setSettings, version, calendarVersions, epoch, bump]
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -111,4 +121,10 @@ export function useCalendars() {
 
 export function useCalendar(id: string): Calendar | undefined {
   return useCalendars().calendars.find((c) => c.id === id);
+}
+
+/** Changes when calendarId's contents may have changed: its screen reloads on it. */
+export function useCalendarVersion(calendarId: string): string {
+  const { calendarVersions, epoch } = useCalendars();
+  return `${epoch}.${calendarVersions[calendarId] ?? 0}`;
 }

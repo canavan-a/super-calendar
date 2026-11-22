@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { CycleDay, CycleSummary, FLOWS, Flow, api, displayColor, layerOn } from '../api/calendars';
+import { CycleDay, CycleSummary, FERTILE_COLOR, FLOWS, Flow, api, displayColor, layerOn } from '../api/calendars';
 import { ErrorText, HeaderButton, Muted, Row, SectionTitle, Sheet, ToggleRow } from '../components/kit';
 import { DayMarks, MonthGrid, withAlpha } from '../components/MonthGrid';
 import { Button, Card, TextField } from '../components/ui';
-import { useCalendar, useCalendars } from '../data/CalendarsContext';
+import { useCalendar, useCalendarVersion, useCalendars } from '../data/CalendarsContext';
 import { DateStr, addDays, diffDays, formatDay, formatShort, startOfMonth, today } from '../dates';
 import { SwitcherTitle } from '../navigation/Switcher';
 import { ScreenProps } from '../navigation/types';
@@ -19,7 +19,8 @@ export default function CycleScreen({ navigation, route }: ScreenProps<'Cycle'>)
   const theme = useTheme();
   const { id } = route.params;
   const cal = useCalendar(id);
-  const { version, bump, settings, setSettings } = useCalendars();
+  const { bump, settings, setSettings } = useCalendars();
+  const version = useCalendarVersion(id);
   const [month, setMonth] = useState(startOfMonth(today()));
   const [days, setDays] = useState<CycleDay[]>([]);
   const [summary, setSummary] = useState<CycleSummary | null>(null);
@@ -59,10 +60,16 @@ export default function CycleScreen({ navigation, route }: ScreenProps<'Cycle'>)
   const marks = useMemo(() => {
     const m: Record<DateStr, DayMarks> = {};
     if (summary) {
+      // The rest of a period under way, ghosted like a predicted one.
+      if (summary.ongoing) {
+        for (let d = summary.ongoing.start; d <= summary.ongoing.end; d = addDays(d, 1)) {
+          m[d] = { ...m[d], outline: { color, dashed: true }, tint: { color, strength: 0 } };
+        }
+      }
       for (const p of summary.predictions) {
         if (showFertile) {
           for (let d = p.fertileStart; d <= p.fertileEnd; d = addDays(d, 1)) {
-            if (d >= summary.today) (m[d] ??= {}).outline = { color: withAlpha(color, 0.5) };
+            if (d >= summary.today) m[d] = { ...m[d], outline: { color: FERTILE_COLOR }, tint: { color: FERTILE_COLOR, strength: 0 } };
           }
         }
         for (let d = p.start; d <= p.end; d = addDays(d, 1)) {
@@ -84,7 +91,7 @@ export default function CycleScreen({ navigation, route }: ScreenProps<'Cycle'>)
     setDays((cur) => [...cur.filter((d) => d.date !== date), ...(flow === 'none' && !notes ? [] : [{ date, flow, notes, updatedBy: '', updatedAt: '' }])]);
     try {
       await api.putCycleDay(id, date, flow, notes);
-      bump();
+      bump(id);
     } catch (e: any) {
       setError(e.message);
       load();
@@ -114,7 +121,7 @@ export default function CycleScreen({ navigation, route }: ScreenProps<'Cycle'>)
           <Muted style={{ fontSize: 12 }}>Predicted</Muted>
           {showFertile ? (
             <>
-              <View style={[styles.swatch, { borderColor: withAlpha(color, 0.5), borderWidth: 2 }]} />
+              <View style={[styles.swatch, { borderColor: FERTILE_COLOR, borderWidth: 2, backgroundColor: withAlpha(FERTILE_COLOR, 0.15) }]} />
               <Muted style={{ fontSize: 12 }}>Fertile (estimate)</Muted>
             </>
           ) : null}

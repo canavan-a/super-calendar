@@ -4,7 +4,7 @@ import { ActivityType, CopyResult, Session, api, displayColor } from '../api/cal
 import { DateField } from '../components/DateField';
 import { ErrorText, HeaderButton, Muted, Row, Segmented, Sheet, Snackbar } from '../components/kit';
 import { Button } from '../components/ui';
-import { useCalendar, useCalendars } from '../data/CalendarsContext';
+import { useCalendar, useCalendarVersion, useCalendars } from '../data/CalendarsContext';
 import { DateStr, addDays, formatDay, formatShort, startOfWeek, today } from '../dates';
 import { SwitcherTitle } from '../navigation/Switcher';
 import { ScreenProps } from '../navigation/types';
@@ -21,7 +21,8 @@ export default function TrainingScreen({ navigation, route }: ScreenProps<'Train
   const theme = useTheme();
   const { id } = route.params;
   const cal = useCalendar(id);
-  const { version } = useCalendars();
+  const version = useCalendarVersion(id);
+  const { bump } = useCalendars();
   const ws = (cal?.settings.weekStart ?? 1) as 0 | 1;
   const [first, setFirst] = useState(() => addDays(startOfWeek(today(), ws), -7));
   const [weeks, setWeeks] = useState(6);
@@ -72,7 +73,7 @@ export default function TrainingScreen({ navigation, route }: ScreenProps<'Train
     setCopy(null);
     try {
       const res = await api.copySessions(id, { from, to, days, mode });
-      await load();
+      bump(id);
       setSnack({
         msg: `Copied ${res.created.length} session${res.created.length === 1 ? '' : 's'}${res.removed.length ? `, replaced ${res.removed.length}` : ''}`,
         undo: res,
@@ -93,7 +94,7 @@ export default function TrainingScreen({ navigation, route }: ScreenProps<'Train
         onPress: async () => {
           try {
             for (const s of list) await api.deleteSession(id, s.id);
-            await load();
+            bump(id);
             setSnack({ msg: `Cleared ${list.length} sessions`, undo: { created: [], removed: list } });
           } catch (e: any) {
             setError(e.message);
@@ -109,7 +110,7 @@ export default function TrainingScreen({ navigation, route }: ScreenProps<'Train
     if (!u) return;
     try {
       await api.restoreSessions(id, u);
-      await load();
+      bump(id);
     } catch (e: any) {
       setError(e.message);
     }
@@ -118,7 +119,7 @@ export default function TrainingScreen({ navigation, route }: ScreenProps<'Train
   const toggleDone = async (s: Session) => {
     try {
       await api.updateSession(id, s.id, { status: s.status === 'done' ? 'planned' : 'done' });
-      load();
+      bump(id);
     } catch (e: any) {
       setError(e.message);
     }

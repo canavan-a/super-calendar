@@ -8,6 +8,7 @@ import {
   OverviewItem,
   UserSettings,
   api,
+  FERTILE_COLOR,
   displayColor,
   kindOn,
   layerOn,
@@ -97,7 +98,9 @@ export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) 
             mk.outline = { color: it.color, dashed: true };
             if (!mk.tint) mk.tint = { color: it.color, strength: 0 };
           } else if (it.layer === 'fertile' && !mk.outline) {
-            mk.outline = { color: it.color + '88' };
+            // Light blue whatever the calendar's colour, so it never reads as a period.
+            mk.outline = { color: FERTILE_COLOR };
+            if (!mk.tint) mk.tint = { color: FERTILE_COLOR, strength: 0 };
           }
         } else {
           (mk.chips ??= []).push({ label: chipLabel(it), color: it.color, faded: it.layer === 'skipped' });

@@ -13,6 +13,7 @@ import (
 	"github.com/canavan-a/super-calendar/server/internal/config"
 	"github.com/canavan-a/super-calendar/server/internal/db"
 	"github.com/canavan-a/super-calendar/server/internal/httpapi"
+	"github.com/canavan-a/super-calendar/server/internal/live"
 	"github.com/canavan-a/super-calendar/server/internal/mail"
 )
 
@@ -46,6 +47,8 @@ func main() {
 		log.Printf("new accounts need the invite code (SUPERCALENDAR_INVITE_CODE)")
 	}
 	calendarService := calendars.NewService(conn, mailer)
+	hub := live.NewHub()
+	calendarService.UseLive(hub)
 	go authService.RunJanitor(ctx)
 
 	router := httpapi.NewRouter(httpapi.Deps{
@@ -53,6 +56,7 @@ func main() {
 		AuthService:  authService,
 		AuthHandlers: auth.NewHandlers(authService),
 		Calendars:    calendars.NewHandlers(calendarService),
+		Live:         hub,
 	})
 
 	log.Printf("supercalendar listening on %s", cfg.ListenAddr)

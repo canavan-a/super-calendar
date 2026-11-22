@@ -83,16 +83,18 @@ export const MonthGrid = memo(function MonthGrid({
                     isSel && { borderColor: theme.primary, borderWidth: 2, borderStyle: 'solid' },
                   ]}
                 >
-                  <Text
-                    style={[
-                      styles.num,
-                      detailed && styles.numTall,
-                      !inMonth && { color: theme.textMuted, opacity: 0.5 },
-                      isToday && styles.today,
-                    ]}
-                  >
-                    {dayOfMonth(d)}
-                  </Text>
+                  <View style={[styles.numWrap, isToday && styles.todayBadge, detailed && isToday && styles.todayBadgeSmall]}>
+                    <Text
+                      style={[
+                        styles.num,
+                        detailed && styles.numTall,
+                        !inMonth && { color: theme.textMuted, opacity: 0.5 },
+                        isToday && styles.today,
+                      ]}
+                    >
+                      {dayOfMonth(d)}
+                    </Text>
+                  </View>
                   {detailed ? (
                     <Chips chips={m?.chips ?? []} muted={!inMonth} />
                   ) : (
@@ -159,7 +161,11 @@ const makeStyles = (theme: Theme) =>
     innerTall: { alignItems: 'stretch', paddingTop: 2, paddingHorizontal: 1, borderRadius: 6 },
     num: { color: theme.text, fontSize: 15, fontWeight: '500' },
     numTall: { textAlign: 'center', fontSize: 13 },
-    today: { color: theme.primary, fontWeight: '800' },
+    // Today: the number in a filled circle of the accent colour.
+    numWrap: { alignSelf: 'center', alignItems: 'center', justifyContent: 'center' },
+    todayBadge: { backgroundColor: theme.primary, width: 26, height: 26, borderRadius: 13 },
+    todayBadgeSmall: { width: 22, height: 22, borderRadius: 11 },
+    today: { color: theme.primaryText, fontWeight: '800', opacity: 1 },
     dots: { flexDirection: 'row', gap: 3, marginTop: 4 },
     dot: { width: 6, height: 6, borderRadius: 3 },
     label: { color: theme.textMuted, fontSize: 9, marginTop: 2 },

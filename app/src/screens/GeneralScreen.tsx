@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { Occurrence, api, displayColor } from '../api/calendars';
-import { Fab, HeaderButton, Muted, Row, SectionTitle, Sheet } from '../components/kit';
+import { Dot, Fab, HeaderButton, Muted, Row, SectionTitle, Sheet } from '../components/kit';
 import { DayMarks, MonthGrid } from '../components/MonthGrid';
-import { useCalendar, useCalendars } from '../data/CalendarsContext';
+import { useCalendar, useCalendarVersion } from '../data/CalendarsContext';
 import { DateStr, addDays, daysCovered, formatDay, localTime, monthGrid, startOfMonth, today } from '../dates';
 import { pickIcsFile } from '../icsIntents';
 import { SwitcherTitle } from '../navigation/Switcher';
@@ -15,7 +15,7 @@ export default function GeneralScreen({ navigation, route }: ScreenProps<'Genera
   const styles = useThemedStyles(makeStyles);
   const { id } = route.params;
   const cal = useCalendar(id);
-  const { version } = useCalendars();
+  const version = useCalendarVersion(id);
   const [month, setMonth] = useState(startOfMonth(today()));
   const [selected, setSelected] = useState(today());
   const [occ, setOcc] = useState<Occurrence[]>([]);
@@ -52,13 +52,21 @@ export default function GeneralScreen({ navigation, route }: ScreenProps<'Genera
     load();
   }, [load, version]);
 
+  // All-day events first, then by start time.
+  const sorted = useMemo(
+    () => occ.slice().sort((a, b) => (a.allDay === b.allDay ? a.start.localeCompare(b.start) : a.allDay ? -1 : 1)),
+    [occ]
+  );
+
+  // Each day lists its events' titles, in each event's own colour.
   const marks = useMemo(() => {
     const m: Record<DateStr, DayMarks> = {};
-    for (const o of occ) for (const d of daysCovered(o.start, o.end, o.allDay)) ((m[d] ??= {}).dots ??= []).push(color);
+    for (const o of sorted)
+      for (const d of daysCovered(o.start, o.end, o.allDay)) ((m[d] ??= {}).chips ??= []).push({ label: o.title, color: o.color || color });
     return m;
-  }, [occ, color]);
+  }, [sorted, color]);
 
-  const day = occ.filter((o) => daysCovered(o.start, o.end, o.allDay).includes(selected));
+  const day = sorted.filter((o) => daysCovered(o.start, o.end, o.allDay).includes(selected));
 
   const importFile = async () => {
     setMenu(false);
@@ -73,7 +81,7 @@ export default function GeneralScreen({ navigation, route }: ScreenProps<'Genera
   return (
     <View style={styles.root}>
       <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}>
-        <MonthGrid month={month} selected={selected} marks={marks} onSelect={setSelected} onMonthChange={(m) => setMonth(startOfMonth(m))} />
+        <MonthGrid detailed month={month} selected={selected} marks={marks} onSelect={setSelected} onMonthChange={(m) => setMonth(startOfMonth(m))} />
         {error ? <Muted style={{ padding: 16 }}>{error}</Muted> : null}
         <SectionTitle>{formatDay(selected, true)}</SectionTitle>
         {day.length === 0 ? <Muted style={{ paddingHorizontal: 16 }}>No events. Tap + to add one.</Muted> : null}
@@ -81,6 +89,7 @@ export default function GeneralScreen({ navigation, route }: ScreenProps<'Genera
           <Row
             key={o.eventId + o.occurrence}
             label={o.title}
+            left={<Dot color={o.color || color} />}
             detail={[o.allDay ? 'All day' : `${localTime(o.start)} – ${localTime(o.end)}`, o.location, o.recurring ? 'repeats' : '']
               .filter(Boolean)
               .join(' · ')}

@@ -185,6 +185,7 @@ export type Occurrence = {
   recurring: boolean;
   title: string;
   location: string;
+  color: string; // the event's own, or ''
   allDay: boolean;
   start: string;
   end: string;
@@ -199,6 +200,8 @@ export type CalEvent = {
   description: string;
   location: string;
   url: string;
+  /** The event's own colour, or '' for its calendar's. */
+  color: string;
   allDay: boolean;
   start: string;
   end: string;
@@ -211,8 +214,11 @@ export type CalEvent = {
 };
 
 export type EventInput = Partial<
-  Pick<CalEvent, 'title' | 'description' | 'location' | 'url' | 'allDay' | 'start' | 'end' | 'tzid' | 'rrule'>
->;
+  Pick<CalEvent, 'title' | 'description' | 'location' | 'url' | 'color' | 'allDay' | 'start' | 'end' | 'tzid' | 'rrule'>
+> & {
+  /** The updatedAt the editor loaded; the server refuses (409) if it's been saved since. */
+  baseUpdatedAt?: string;
+};
 
 export type ImportSource = { ics?: string; url?: string };
 
@@ -270,6 +276,8 @@ export type Session = {
 
 export type SessionInput = Partial<Omit<Session, 'id' | 'calendarId' | 'updatedBy' | 'updatedAt' | 'activityTypeId'>> & {
   activityTypeId?: string; // '' clears it
+  /** The updatedAt the editor loaded; the server refuses (409) if it's been saved since. */
+  baseUpdatedAt?: string;
 };
 
 export type CopyResult = { created: string[]; removed: Session[] };
@@ -307,7 +315,12 @@ export type CycleSummary = {
     fertileEnd: DateStr;
   }[];
   lateDays: number;
+  /** The rest of a period under way, as expected (both ends included). */
+  ongoing: { start: DateStr; end: DateStr } | null;
 };
+
+/** The fertile window's colour, whatever the calendar's. */
+export const FERTILE_COLOR = '#74c0fc';
 
 export const KIND_LABEL: Record<Kind, string> = { general: 'General', training: 'Training', cycle: 'Cycle' };
 

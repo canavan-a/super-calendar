@@ -381,6 +381,7 @@ func (s *Service) Import(ctx context.Context, calendarID, userID string, req Imp
 			e.ID = old.ID
 			e.ExDates = union(old.ExDates, e.ExDates)
 			e.Cancelled = e.Cancelled || old.Cancelled
+			e.Color = old.Color // a colour picked in the app
 			if err := s.saveEvent(ctx, tx, e, userID); err != nil {
 				return nil, err
 			}

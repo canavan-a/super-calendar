@@ -7,6 +7,9 @@ import { TextField } from '../components/ui';
 import { useCalendars } from '../data/CalendarsContext';
 import { DateStr, today, validTime } from '../dates';
 import { ScreenProps } from '../navigation/types';
+import { ChangedBanner } from '../components/ChangedBanner';
+import { useLiveChanges } from '../live';
+import { ApiError } from '../api/client';
 import { Theme, useTheme, useThemedStyles } from '../theme';
 import { activityGlyph } from '../training';
 
@@ -65,16 +68,7 @@ export default function SessionEditorScreen({ navigation, route }: ScreenProps<'
     if (!sessionId) return;
     (async () => {
       try {
-        const found = await api.getSession(calendarId, sessionId);
-        setSession(found);
-        setDate(found.date);
-        setTime(found.time);
-        setTypeId(found.activityTypeId);
-        setTitle(found.title);
-        setPlan(found.plan ?? {});
-        setResult(found.result ?? {});
-        setStatus(found.status);
-        setNotes(found.notes);
+        showSession(await api.getSession(calendarId, sessionId));
         setLoaded(true);
       } catch (e: any) {
         setError(e.message);
@@ -82,14 +76,40 @@ export default function SessionEditorScreen({ navigation, route }: ScreenProps<'
     })();
   }, [calendarId, sessionId]);
 
+  // Fills the form from a session (on load, or "keep theirs" after a conflict).
+  function showSession(found: Session) {
+    setSession(found);
+    setDate(found.date);
+    setTime(found.time);
+    setTypeId(found.activityTypeId);
+    setTitle(found.title);
+    setPlan(found.plan ?? {});
+    setResult(found.result ?? {});
+    setStatus(found.status);
+    setNotes(found.notes);
+  }
+
+  // Someone else saved this session while it's open here (live updates).
+  const [remote, setRemote] = useState<string | null>(null);
+  useLiveChanges(calendarId, (c) => {
+    if (sessionId && c.itemId === sessionId) setRemote(c.byName || 'Someone');
+  });
+  const loadTheirs = () => {
+    setRemote(null);
+    if (sessionId) api.getSession(calendarId, sessionId).then(showSession).catch((e) => setError(e.message));
+  };
+
   const type = types.find((t) => t.id === typeId);
   const fields = type?.fields ?? ['duration', 'distance', 'intensity'];
 
-  const save = async () => {
+  // Sends the version this editor loaded; if someone saved in between, the
+  // server refuses and this asks whether to keep theirs or overwrite.
+  const save = async (overwrite = false) => {
     if (time && !validTime(time)) return setError('Time looks like 07:30');
     setSaving(true);
     setError(null);
     const input = {
+      baseUpdatedAt: overwrite ? undefined : session?.updatedAt,
       date,
       time,
       activityTypeId: typeId ?? '',
@@ -102,11 +122,18 @@ export default function SessionEditorScreen({ navigation, route }: ScreenProps<'
     try {
       if (sessionId) await api.updateSession(calendarId, sessionId, input);
       else await api.createSession(calendarId, input);
-      bump();
+      bump(calendarId);
       navigation.goBack();
     } catch (e: any) {
-      setError(e.message);
       setSaving(false);
+      if (e instanceof ApiError && e.status === 409 && e.body?.conflict) {
+        Alert.alert(`${e.body.by || 'Someone'} changed this`, 'They saved it while you were editing. Keep their version, or overwrite it with yours?', [
+          { text: 'Keep theirs', onPress: () => { setRemote(null); showSession(e.body.current as Session); } },
+          { text: 'Overwrite', style: 'destructive', onPress: () => save(true) },
+        ]);
+        return;
+      }
+      setError(e.message);
     }
   };
 
@@ -119,7 +146,7 @@ export default function SessionEditorScreen({ navigation, route }: ScreenProps<'
         onPress: async () => {
           try {
             await api.deleteSession(calendarId, sessionId!);
-            bump();
+            bump(calendarId);
             navigation.goBack();
           } catch (e: any) {
             setError(e.message);
@@ -131,7 +158,7 @@ export default function SessionEditorScreen({ navigation, route }: ScreenProps<'
   useLayoutEffect(() => {
     navigation.setOptions({
       title: sessionId ? 'Session' : 'New session',
-      headerRight: () => (saving ? <ActivityIndicator color={theme.primary} /> : <HeaderButton label="Save" onPress={save} />),
+      headerRight: () => (saving ? <ActivityIndicator color={theme.primary} /> : <HeaderButton label="Save" onPress={() => save()} />),
     });
   });
 
@@ -146,6 +173,7 @@ export default function SessionEditorScreen({ navigation, route }: ScreenProps<'
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ padding: 16, paddingBottom: 60, gap: 10 }} keyboardShouldPersistTaps="handled">
       <ErrorText error={error} />
+      {remote ? <ChangedBanner name={remote} onLoad={loadTheirs} /> : null}
       <Text style={styles.label}>Activity</Text>
       <View style={styles.chips}>
         {types

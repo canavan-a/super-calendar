@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, View } from 'react-native';
 import { useAuth } from '../auth/AuthContext';
 import { CalendarsProvider } from '../data/CalendarsContext';
 import { IcsPayload, initialIcs, onIcs } from '../icsIntents';
+import { LiveProvider } from '../live';
 import ActivityTypesScreen from '../screens/ActivityTypesScreen';
 import CalendarSettingsScreen from '../screens/CalendarSettingsScreen';
 import CycleScreen from '../screens/CycleScreen';
@@ -50,6 +51,7 @@ function SignedIn() {
   useIcsIntents();
   return (
     <CalendarsProvider>
+      <LiveProvider>
       <Stack.Navigator>
         <Stack.Screen name="Overview" component={OverviewScreen} />
         <Stack.Screen name="General" component={GeneralScreen} />
@@ -64,6 +66,7 @@ function SignedIn() {
         <Stack.Screen name="ActivityTypes" component={ActivityTypesScreen} options={{ title: 'Activities' }} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
       </Stack.Navigator>
+      </LiveProvider>
     </CalendarsProvider>
   );
 }

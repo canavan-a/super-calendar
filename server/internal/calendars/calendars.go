@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/canavan-a/super-calendar/server/internal/live"
 	"github.com/canavan-a/super-calendar/server/internal/ratelimit"
 	"github.com/google/uuid"
 )
@@ -28,6 +29,21 @@ var (
 type InvalidError struct{ Msg string }
 
 func (e *InvalidError) Error() string { return e.Msg }
+
+// ConflictError: an edit was based on a version someone has since changed.
+// Current is what's there now and By who saved it, so the app can ask
+// whether to keep theirs or overwrite.
+type ConflictError struct {
+	Current any
+	By      string
+}
+
+func (e *ConflictError) Error() string { return "changed by someone else" }
+
+// stale reports whether an edit based on base would overwrite a newer save.
+func stale(base *string, current string) bool {
+	return base != nil && *base != "" && *base != current
+}
 
 func invalid(format string, args ...any) error {
 	return &InvalidError{Msg: fmt.Sprintf(format, args...)}
@@ -70,7 +86,8 @@ type Service struct {
 	now    func() time.Time
 	// Invite emails from everyone together (inviteEmailsPerHour).
 	inviteEmails *ratelimit.Limiter
-	fetcher      Fetcher // nil: fetch links over the internet
+	fetcher      Fetcher   // nil: fetch links over the internet
+	live         *live.Hub // nil: no live updates (live.go)
 }
 
 func NewService(db *sql.DB, mailer Mailer) *Service {
@@ -432,6 +449,9 @@ func (s *Service) Invite(ctx context.Context, cal *Calendar, inviterID, email st
 		return nil, ErrNotFound
 	}
 	inv := invites[0]
+	if created > 0 {
+		s.toInbox(ctx, email)
+	}
 	if created > 0 && s.mailer != nil && !s.inviteEmails.Allow("all") {
 		log.Printf("invite email to %s skipped: over %d an hour (the invite is in their Inbox)", email, inviteEmailsPerHour)
 	} else if created > 0 && s.mailer != nil {
@@ -462,6 +482,8 @@ func (s *Service) SentInvites(ctx context.Context, calendarID string) ([]Invite,
 }
 
 func (s *Service) CancelInvite(ctx context.Context, calendarID, inviteID string) error {
+	var email string
+	_ = s.db.QueryRowContext(ctx, `SELECT email FROM calendar_invites WHERE id = ? AND calendar_id = ?`, inviteID, calendarID).Scan(&email)
 	res, err := s.db.ExecContext(ctx, `UPDATE calendar_invites SET status = 'cancelled', responded_at = ?
 		WHERE id = ? AND calendar_id = ? AND status = 'pending'`, stamp(s.now()), inviteID, calendarID)
 	if err != nil {
@@ -470,6 +492,7 @@ func (s *Service) CancelInvite(ctx context.Context, calendarID, inviteID string)
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
+	s.toInbox(ctx, email)
 	return nil
 }
 

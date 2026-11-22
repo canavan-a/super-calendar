@@ -14,6 +14,7 @@ import (
 	"github.com/canavan-a/super-calendar/server/internal/auth"
 	"github.com/canavan-a/super-calendar/server/internal/calendars"
 	"github.com/canavan-a/super-calendar/server/internal/config"
+	"github.com/canavan-a/super-calendar/server/internal/live"
 	"github.com/canavan-a/super-calendar/server/internal/testdb"
 )
 
@@ -43,9 +44,11 @@ func newEnv(t *testing.T) *env {
 	store := auth.NewStore(conn)
 	as := auth.NewService(store, mailer)
 	cs := calendars.NewService(conn, mailer)
+	hub := live.NewHub()
+	cs.UseLive(hub)
 	srv := httptest.NewServer(NewRouter(Deps{
 		Config: &config.Config{}, AuthService: as, AuthHandlers: auth.NewHandlers(as),
-		Calendars: calendars.NewHandlers(cs),
+		Calendars: calendars.NewHandlers(cs), Live: hub,
 	}))
 	t.Cleanup(srv.Close)
 	return &env{t: t, srv: srv, mailer: mailer, auth: as, store: store}
@@ -570,5 +573,25 @@ func TestOverviewShowsSessionAmounts(t *testing.T) {
 	e.mustCall(ana, "GET", "/overview?from=2026-12-07&to=2026-12-08", nil, 200, &ov)
 	if d := ov.Items[0].DistanceKm; d == nil || *d != 8.4 {
 		t.Fatalf("done item distance %v", d)
+	}
+}
+
+func TestEventColours(t *testing.T) {
+	e := newEnv(t)
+	ana := e.signUp("ana@x.co", "Ana")
+	cal := e.create(ana, "general", "Home") // #336699
+	base := "/calendars/" + cal + "/events"
+	e.mustCall(ana, "POST", base, map[string]any{"title": "Red", "allDay": true, "start": "2026-05-01", "color": "#e03131"}, 201, nil)
+	e.mustCall(ana, "POST", base, map[string]any{"title": "Plain", "allDay": true, "start": "2026-05-01"}, 201, nil)
+	e.mustCall(ana, "POST", base, map[string]any{"title": "Bad", "allDay": true, "start": "2026-05-01", "color": "red"}, 400, nil)
+
+	var ov struct{ Items []calendars.Item }
+	e.mustCall(ana, "GET", "/overview?from=2026-05-01&to=2026-05-02", nil, 200, &ov)
+	got := map[string]string{}
+	for _, it := range ov.Items {
+		got[it.Title] = it.Color
+	}
+	if got["Red"] != "#e03131" || got["Plain"] != "#336699" {
+		t.Fatalf("overview colours %v", got)
 	}
 }
