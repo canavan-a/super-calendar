@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
 
 	"github.com/canavan-a/super-calendar/server/internal/auth"
 	"github.com/canavan-a/super-calendar/server/internal/httpx"
@@ -34,7 +35,10 @@ func calendarFrom(r *http.Request) *Calendar {
 func fail(w http.ResponseWriter, err error) {
 	var inv *InvalidError
 	var conflict *ConflictError
+	var fetchErr *FetchError
 	switch {
+	case errors.As(err, &fetchErr):
+		httpx.WriteError(w, http.StatusBadRequest, fetchErr.Msg)
 	case errors.As(err, &conflict):
 		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
 			"error": "changed by someone else", "conflict": true, "by": conflict.By, "current": conflict.Current,
@@ -43,6 +47,8 @@ func fail(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusBadRequest, inv.Msg)
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, ErrTooSoon):
+		httpx.WriteError(w, http.StatusTooManyRequests, "that was just done; try again in a minute")
 	case errors.Is(err, ErrAlreadyMember):
 		httpx.WriteError(w, http.StatusConflict, "they're already in this calendar")
 	default:
@@ -64,11 +70,11 @@ func (h *Handlers) RequireMember(next http.Handler) http.Handler {
 	})
 }
 
-// RequireKind only lets requests through for calendars of kind.
-func RequireKind(kind string) func(http.Handler) http.Handler {
+// RequireKind only lets requests through for calendars of the given kinds.
+func RequireKind(kinds ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if calendarFrom(r).Kind != kind {
+			if !slices.Contains(kinds, calendarFrom(r).Kind) {
 				httpx.WriteError(w, http.StatusNotFound, "not found")
 				return
 			}
@@ -85,6 +91,7 @@ func (h *Handlers) Routes(r chi.Router) {
 	r.Post("/invites/{inviteID}/accept", h.respond(true))
 	r.Post("/invites/{inviteID}/decline", h.respond(false))
 	r.Get("/overview", h.overview)
+	r.Post("/subscriptions/preview", h.previewSubscription)
 	r.Get("/me/settings", h.getSettings)
 	r.Put("/me/settings", h.putSettings)
 
@@ -100,11 +107,16 @@ func (h *Handlers) Routes(r chi.Router) {
 		r.Post("/invites", h.invite)
 		r.Delete("/invites/{inviteID}", h.cancelInvite)
 
+		// Events can be read in general and subscribed calendars, but only
+		// written in general ones: a subscribed calendar's are the feed's.
+		r.Group(func(r chi.Router) {
+			r.Use(RequireKind(General, Subscribed))
+			r.Get("/events", h.listEvents)
+			r.Get("/events/{eventID}", h.getEvent)
+		})
 		r.Group(func(r chi.Router) {
 			r.Use(RequireKind(General))
-			r.Get("/events", h.listEvents)
 			r.Post("/events", h.createEvent)
-			r.Get("/events/{eventID}", h.getEvent)
 			r.Patch("/events/{eventID}", h.updateEvent)
 			r.Delete("/events/{eventID}", h.deleteEvent)
 			r.Post("/import/preview", h.previewImport)
@@ -129,6 +141,12 @@ func (h *Handlers) Routes(r chi.Router) {
 			r.Put("/cycle/days/{date}", h.putCycleDay)
 			r.Get("/cycle/summary", h.cycleSummary)
 		})
+		r.Group(func(r chi.Router) {
+			r.Use(RequireKind(Subscribed))
+			r.Get("/feed", h.getFeed)
+			r.Put("/feed", h.replaceFeedLink)
+			r.Post("/feed/refresh", h.refreshFeed)
+		})
 	})
 }
 
@@ -144,11 +162,17 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Kind, Name, Color string }
+	var req struct{ Kind, Name, Color, URL, TZ string }
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	c, err := h.s.Create(r.Context(), userID(r), req.Kind, req.Name, req.Color)
+	var c *Calendar
+	var err error
+	if req.Kind == Subscribed {
+		c, err = h.s.CreateSubscribed(r.Context(), userID(r), req.Name, req.Color, req.URL, req.TZ)
+	} else {
+		c, err = h.s.Create(r.Context(), userID(r), req.Kind, req.Name, req.Color)
+	}
 	if err != nil {
 		fail(w, err)
 		return
@@ -412,6 +436,52 @@ func (h *Handlers) importICS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, res)
+}
+
+// --- Subscribed: the feed ---
+
+func (h *Handlers) previewSubscription(w http.ResponseWriter, r *http.Request) {
+	var req struct{ URL, TZ string }
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	p, err := h.s.PreviewSubscription(r.Context(), userID(r), req.URL, req.TZ)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, p)
+}
+
+func (h *Handlers) writeFeed(w http.ResponseWriter, r *http.Request) {
+	f, err := h.s.Feed(r.Context(), calendarFrom(r).ID, userID(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"feed": f})
+}
+
+func (h *Handlers) getFeed(w http.ResponseWriter, r *http.Request) { h.writeFeed(w, r) }
+
+func (h *Handlers) replaceFeedLink(w http.ResponseWriter, r *http.Request) {
+	var req struct{ URL, TZ string }
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if err := h.s.ReplaceFeedLink(r.Context(), calendarFrom(r).ID, userID(r), req.URL, req.TZ); err != nil {
+		fail(w, err)
+		return
+	}
+	h.writeFeed(w, r)
+}
+
+func (h *Handlers) refreshFeed(w http.ResponseWriter, r *http.Request) {
+	if err := h.s.RefreshFeed(r.Context(), calendarFrom(r).ID); err != nil {
+		fail(w, err)
+		return
+	}
+	h.writeFeed(w, r)
 }
 
 // --- Training ---

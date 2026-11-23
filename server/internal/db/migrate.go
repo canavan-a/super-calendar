@@ -17,7 +17,11 @@ var migrationFiles embed.FS
 // filename order. Only pure database/sql + SQLite is used here rather than a
 // migration framework, since the schema is small and this avoids a
 // dependency for a handful of files.
-func Migrate(ctx context.Context, conn *sql.DB) error {
+func Migrate(ctx context.Context, conn *sql.DB) error { return migrate(ctx, conn, "") }
+
+// migrate stops after the migration named upTo, if it's set (tests use it to
+// fill a database as it was before a migration).
+func migrate(ctx context.Context, conn *sql.DB, upTo string) error {
 	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)`); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
@@ -33,6 +37,9 @@ func Migrate(ctx context.Context, conn *sql.DB) error {
 	sort.Strings(names)
 
 	for _, name := range names {
+		if upTo != "" && name > upTo {
+			break
+		}
 		var already string
 		err := conn.QueryRowContext(ctx, `SELECT name FROM schema_migrations WHERE name = ?`, name).Scan(&already)
 		if err == nil {
@@ -48,26 +55,60 @@ func Migrate(ctx context.Context, conn *sql.DB) error {
 		}
 		up, _, _ := strings.Cut(string(content), "-- +goose Down")
 		up = strings.Replace(up, "-- +goose Up", "", 1)
-
-		tx, err := conn.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		for _, stmt := range splitStatements(up) {
-			if _, err := tx.ExecContext(ctx, stmt); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("migration %s: %w", name, err)
-			}
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (name) VALUES (?)`, name); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
+		if err := apply(ctx, conn, name, up, strings.Contains(up, nofkMarker)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// nofkMarker in a migration runs it with foreign keys off, as SQLite's
+// procedure for rebuilding a table requires: with them on, dropping a table
+// others reference first deletes its rows, and ON DELETE CASCADE takes
+// everything that pointed at them too. Foreign keys are checked before the
+// migration commits, so a rebuild that breaks a reference fails instead.
+const nofkMarker = "-- +nofk"
+
+func apply(ctx context.Context, db *sql.DB, name, up string, nofk bool) error {
+	// One connection throughout: PRAGMA foreign_keys is per connection, and
+	// can't be changed inside a transaction.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if nofk {
+		if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+			return err
+		}
+		defer conn.ExecContext(context.WithoutCancel(ctx), `PRAGMA foreign_keys = ON`)
+	}
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range splitStatements(up) {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migration %s: %w", name, err)
+		}
+	}
+	if nofk {
+		rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+		if err != nil {
+			return err
+		}
+		broken := rows.Next()
+		rows.Close()
+		if broken {
+			return fmt.Errorf("migration %s: it leaves rows pointing at ones that don't exist", name)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (name) VALUES (?)`, name); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // splitStatements splits a migration on ";", except inside a

@@ -2,13 +2,12 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
-import { KIND_LABEL, Kind, displayColor } from '../api/calendars';
+import { KINDS, KIND_LABEL, Kind, displayColor } from '../api/calendars';
 import { Badge, Dot, Row, SectionTitle, Sheet } from '../components/kit';
 import { useCalendars } from '../data/CalendarsContext';
 import { useTheme } from '../theme';
 import { RootStackParamList, routeForKind } from './types';
 
-const KINDS: Kind[] = ['general', 'training', 'cycle'];
 
 // Switching modes: the header title opens one list with the Overview, every
 // calendar grouped by type, "+ New calendar" and the Inbox.
@@ -54,7 +53,14 @@ export function SwitcherTitle({ title, color }: { title: string; color?: string 
                 <Row
                   key={c.id}
                   label={c.name}
-                  detail={c.memberCount > 1 ? `Shared with ${c.memberCount - 1}` : undefined}
+                  detail={
+                    [
+                      c.feed?.status === 'broken' ? '⚠ Link stopped working' : c.feed?.status === 'failing' ? "⚠ Couldn't sync lately" : '',
+                      c.memberCount > 1 ? `Shared with ${c.memberCount - 1}` : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || undefined
+                  }
                   left={<Dot color={displayColor(c)} />}
                   onPress={() => openCalendar(c.id, c.kind)}
                 />

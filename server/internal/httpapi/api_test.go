@@ -35,6 +35,7 @@ type env struct {
 	mailer *fakeMailer
 	auth   *auth.Service
 	store  *auth.Store
+	cal    *calendars.Service
 }
 
 func newEnv(t *testing.T) *env {
@@ -51,7 +52,7 @@ func newEnv(t *testing.T) *env {
 		Calendars: calendars.NewHandlers(cs), Live: hub,
 	}))
 	t.Cleanup(srv.Close)
-	return &env{t: t, srv: srv, mailer: mailer, auth: as, store: store}
+	return &env{t: t, srv: srv, mailer: mailer, auth: as, store: store, cal: cs}
 }
 
 // signUp makes an account and returns its token.

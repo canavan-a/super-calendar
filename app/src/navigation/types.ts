@@ -5,10 +5,12 @@ import { DateStr } from '../dates';
 export type RootStackParamList = {
   Overview: undefined;
   General: { id: string };
+  Subscribed: { id: string };
   Training: { id: string };
   Cycle: { id: string };
   Inbox: undefined;
-  NewCalendar: { kind?: Kind } | undefined;
+  /** url: a link to subscribe to (from Import's "Subscribe instead"). */
+  NewCalendar: { kind?: Kind; url?: string } | undefined;
   CalendarSettings: { id: string };
   EventEditor: { calendarId: string; eventId?: string; occurrence?: string; date?: DateStr };
   Import: { source?: ImportSource; calendarId?: string };
@@ -19,7 +21,6 @@ export type RootStackParamList = {
 
 export type ScreenProps<T extends keyof RootStackParamList> = NativeStackScreenProps<RootStackParamList, T>;
 
-export const routeForKind = (k: Kind) => (k === 'general' ? 'General' : k === 'training' ? 'Training' : 'Cycle') as
-  | 'General'
-  | 'Training'
-  | 'Cycle';
+const ROUTES = { general: 'General', subscribed: 'Subscribed', training: 'Training', cycle: 'Cycle' } as const;
+
+export const routeForKind = (k: Kind) => ROUTES[k];

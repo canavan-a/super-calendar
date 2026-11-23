@@ -50,7 +50,7 @@ func (s *Sender) SendLoginCode(to, code string) error {
 	return nil
 }
 
-var kindNames = map[string]string{"general": "calendar", "training": "training calendar", "cycle": "cycle calendar"}
+var kindNames = map[string]string{"general": "calendar", "training": "training calendar", "cycle": "cycle calendar", "subscribed": "subscribed calendar"}
 
 // SendInvite tells someone they've been invited to a calendar. It names the
 // calendar but carries none of its data.

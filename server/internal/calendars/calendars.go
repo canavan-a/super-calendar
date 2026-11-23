@@ -53,9 +53,12 @@ const (
 	General  = "general"
 	Training = "training"
 	Cycle    = "cycle"
+	// Subscribed calendars follow an iCal link (feeds.go). Their events are
+	// the feed's, and only the sync writes them.
+	Subscribed = "subscribed"
 )
 
-func validKind(k string) bool { return k == General || k == Training || k == Cycle }
+func validKind(k string) bool { return k == General || k == Training || k == Cycle || k == Subscribed }
 
 var colorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
@@ -88,10 +91,15 @@ type Service struct {
 	inviteEmails *ratelimit.Limiter
 	fetcher      Fetcher   // nil: fetch links over the internet
 	live         *live.Hub // nil: no live updates (live.go)
+	// Subscription previews per user (feeds.go).
+	feedPreviews *ratelimit.Limiter
+	feedLocks    keyedMutex
 }
 
 func NewService(db *sql.DB, mailer Mailer) *Service {
-	return &Service{db: db, mailer: mailer, now: time.Now, inviteEmails: ratelimit.New(inviteEmailsPerHour, time.Hour)}
+	return &Service{db: db, mailer: mailer, now: time.Now,
+		inviteEmails: ratelimit.New(inviteEmailsPerHour, time.Hour),
+		feedPreviews: ratelimit.New(feedPreviewsPerHour, time.Hour)}
 }
 
 // Calendar is a calendar as one member sees it: the shared fields plus their
@@ -107,6 +115,14 @@ type Calendar struct {
 	Settings    json.RawMessage `json:"settings"`
 	MemberCount int             `json:"memberCount"`
 	CreatedAt   string          `json:"createdAt"`
+	// Feed is how a subscribed calendar's syncing is going (nil for other
+	// kinds), so the list can mark one whose link stopped working.
+	Feed *FeedStatus `json:"feed,omitempty"`
+}
+
+type FeedStatus struct {
+	Status       string  `json:"status"` // ok, failing, broken
+	LastSyncedAt *string `json:"lastSyncedAt"`
 }
 
 // DisplayColor is the member's own colour if they picked one.
@@ -118,17 +134,29 @@ func (c *Calendar) DisplayColor() string {
 }
 
 const calendarCols = `c.id, c.kind, c.name, c.color, m.color, m.in_overview, m.position, c.settings,
-	(SELECT COUNT(*) FROM calendar_members x WHERE x.calendar_id = c.id), c.created_at`
+	(SELECT COUNT(*) FROM calendar_members x WHERE x.calendar_id = c.id), c.created_at,
+	f.status, f.last_synced_at`
+
+// calendarJoin joins what calendarCols reads; the query adds the member.
+const calendarJoin = ` FROM calendars c LEFT JOIN calendar_feeds f ON f.calendar_id = c.id
+	JOIN calendar_members m ON m.calendar_id = c.id AND m.user_id = ? `
 
 func scanCalendar(row interface{ Scan(...any) error }) (*Calendar, error) {
 	var c Calendar
 	var settings string
-	var myColor sql.NullString
-	if err := row.Scan(&c.ID, &c.Kind, &c.Name, &c.Color, &myColor, &c.InOverview, &c.Position, &settings, &c.MemberCount, &c.CreatedAt); err != nil {
+	var myColor, feedStatus, syncedAt sql.NullString
+	if err := row.Scan(&c.ID, &c.Kind, &c.Name, &c.Color, &myColor, &c.InOverview, &c.Position, &settings, &c.MemberCount, &c.CreatedAt,
+		&feedStatus, &syncedAt); err != nil {
 		return nil, err
 	}
 	if myColor.Valid {
 		c.MyColor = &myColor.String
+	}
+	if feedStatus.Valid {
+		c.Feed = &FeedStatus{Status: feedStatus.String}
+		if syncedAt.Valid {
+			c.Feed.LastSyncedAt = &syncedAt.String
+		}
 	}
 	c.Settings = json.RawMessage(settings)
 	return &c, nil
@@ -137,8 +165,7 @@ func scanCalendar(row interface{ Scan(...any) error }) (*Calendar, error) {
 // Get returns calendarID as userID sees it, or ErrNotFound if they aren't a
 // member: a non-member can't tell the calendar exists.
 func (s *Service) Get(ctx context.Context, calendarID, userID string) (*Calendar, error) {
-	c, err := scanCalendar(s.db.QueryRowContext(ctx, `SELECT `+calendarCols+`
-		FROM calendars c JOIN calendar_members m ON m.calendar_id = c.id AND m.user_id = ?
+	c, err := scanCalendar(s.db.QueryRowContext(ctx, `SELECT `+calendarCols+calendarJoin+`
 		WHERE c.id = ?`, userID, calendarID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -147,8 +174,7 @@ func (s *Service) Get(ctx context.Context, calendarID, userID string) (*Calendar
 }
 
 func (s *Service) List(ctx context.Context, userID string) ([]*Calendar, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+calendarCols+`
-		FROM calendars c JOIN calendar_members m ON m.calendar_id = c.id AND m.user_id = ?
+	rows, err := s.db.QueryContext(ctx, `SELECT `+calendarCols+calendarJoin+`
 		ORDER BY m.position, c.created_at`, userID)
 	if err != nil {
 		return nil, err
@@ -176,6 +202,9 @@ func cleanName(name string) (string, error) {
 func (s *Service) Create(ctx context.Context, userID, kind, name, color string) (*Calendar, error) {
 	if !validKind(kind) {
 		return nil, invalid("unknown calendar type")
+	}
+	if kind == Subscribed {
+		return nil, invalid("a subscribed calendar needs a link")
 	}
 	name, err := cleanName(name)
 	if err != nil {

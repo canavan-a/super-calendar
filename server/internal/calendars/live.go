@@ -92,6 +92,10 @@ func areaFor(r *http.Request) string {
 		return "training"
 	case "cycle":
 		return "cycle"
+	case "feed":
+		// A new link or a refresh: the status (in the calendar list) and
+		// the events may both have changed.
+		return "calendar"
 	}
 	return "calendar"
 }

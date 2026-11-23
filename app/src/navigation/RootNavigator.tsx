@@ -18,6 +18,7 @@ import OverviewScreen from '../screens/OverviewScreen';
 import SessionEditorScreen from '../screens/SessionEditorScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import SignInScreen from '../screens/SignInScreen';
+import SubscribedScreen from '../screens/SubscribedScreen';
 import TrainingScreen from '../screens/TrainingScreen';
 import { useTheme } from '../theme';
 import { RootStackParamList } from './types';
@@ -55,6 +56,7 @@ function SignedIn() {
       <Stack.Navigator>
         <Stack.Screen name="Overview" component={OverviewScreen} />
         <Stack.Screen name="General" component={GeneralScreen} />
+        <Stack.Screen name="Subscribed" component={SubscribedScreen} />
         <Stack.Screen name="Training" component={TrainingScreen} />
         <Stack.Screen name="Cycle" component={CycleScreen} />
         <Stack.Screen name="Inbox" component={InboxScreen} />

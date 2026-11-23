@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { Occurrence, api, displayColor } from '../api/calendars';
 import { Dot, Fab, HeaderButton, Muted, Row, SectionTitle, Sheet } from '../components/kit';
@@ -12,8 +12,28 @@ import { Theme, useThemedStyles } from '../theme';
 
 // A general calendar: the month, the selected day's events, and import.
 export default function GeneralScreen({ navigation, route }: ScreenProps<'General'>) {
+  return <EventsCalendar navigation={navigation as any} id={route.params.id} />;
+}
+
+/**
+ * The month and the selected day's events, for the kinds made of events.
+ * readOnly (a subscribed calendar, whose events are its link's) drops adding
+ * and importing; top goes above the month (the sync status).
+ */
+export function EventsCalendar({
+  navigation,
+  id,
+  readOnly = false,
+  top,
+  onReload,
+}: {
+  navigation: ScreenProps<'General'>['navigation'];
+  id: string;
+  readOnly?: boolean;
+  top?: React.ReactNode;
+  onReload?: () => void;
+}) {
   const styles = useThemedStyles(makeStyles);
-  const { id } = route.params;
   const cal = useCalendar(id);
   const version = useCalendarVersion(id);
   const [month, setMonth] = useState(startOfMonth(today()));
@@ -51,6 +71,10 @@ export default function GeneralScreen({ navigation, route }: ScreenProps<'Genera
   useEffect(() => {
     load();
   }, [load, version]);
+  const reload = () => {
+    load();
+    onReload?.();
+  };
 
   // All-day events first, then by start time.
   const sorted = useMemo(
@@ -80,11 +104,14 @@ export default function GeneralScreen({ navigation, route }: ScreenProps<'Genera
 
   return (
     <View style={styles.root}>
-      <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}>
+      <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={reload} />}>
+        {top}
         <MonthGrid detailed month={month} selected={selected} marks={marks} onSelect={setSelected} onMonthChange={(m) => setMonth(startOfMonth(m))} />
         {error ? <Muted style={{ padding: 16 }}>{error}</Muted> : null}
         <SectionTitle>{formatDay(selected, true)}</SectionTitle>
-        {day.length === 0 ? <Muted style={{ paddingHorizontal: 16 }}>No events. Tap + to add one.</Muted> : null}
+        {day.length === 0 ? (
+          <Muted style={{ paddingHorizontal: 16 }}>{readOnly ? 'No events.' : 'No events. Tap + to add one.'}</Muted>
+        ) : null}
         {day.map((o) => (
           <Row
             key={o.eventId + o.occurrence}
@@ -100,20 +127,24 @@ export default function GeneralScreen({ navigation, route }: ScreenProps<'Genera
         ))}
         <View style={{ height: 100 }} />
       </ScrollView>
-      <Fab onPress={() => navigation.navigate('EventEditor', { calendarId: id, date: selected })} />
+      {readOnly ? null : <Fab onPress={() => navigation.navigate('EventEditor', { calendarId: id, date: selected })} />}
       <Sheet visible={menu} onClose={() => setMenu(false)}>
-        <Row label="Import .ics file" detail="From your phone's files" onPress={importFile} />
-        <Row
-          label="Import from a link"
-          detail="An .ics or webcal:// address"
-          onPress={() => {
-            setMenu(false);
-            navigation.navigate('Import', { calendarId: id });
-          }}
-        />
+        {readOnly ? null : (
+          <>
+            <Row label="Import .ics file" detail="From your phone's files" onPress={importFile} />
+            <Row
+              label="Import from a link"
+              detail="An .ics or webcal:// address"
+              onPress={() => {
+                setMenu(false);
+                navigation.navigate('Import', { calendarId: id });
+              }}
+            />
+          </>
+        )}
         <Row
           label="Calendar settings"
-          detail="Name, colour, members and invites"
+          detail={readOnly ? 'Name, colour, the link, members and invites' : 'Name, colour, members and invites'}
           onPress={() => {
             setMenu(false);
             navigation.navigate('CalendarSettings', { id });

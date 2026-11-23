@@ -50,6 +50,7 @@ func main() {
 	hub := live.NewHub()
 	calendarService.UseLive(hub)
 	go authService.RunJanitor(ctx)
+	go calendarService.RunFeedSync(ctx) // subscribed calendars' links
 
 	router := httpapi.NewRouter(httpapi.Deps{
 		Config:       cfg,

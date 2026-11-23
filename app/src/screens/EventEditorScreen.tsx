@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CalEvent, EventInput, api, displayColor } from '../api/calendars';
 import { DateField } from '../components/DateField';
 import { ColorPicker, Dot, ErrorText, HeaderButton, Muted, Row, SectionTitle, ToggleRow } from '../components/kit';
 import { TextField } from '../components/ui';
 import { useCalendar, useCalendars } from '../data/CalendarsContext';
-import { DateStr, addDays, diffDays, localDate, localTime, timeZone, toInstant, today, validTime } from '../dates';
+import { DateStr, addDays, diffDays, formatDay, localDate, localTime, timeZone, toInstant, today, validTime } from '../dates';
 import { ScreenProps } from '../navigation/types';
 import { ChangedBanner } from '../components/ChangedBanner';
 import { useLiveChanges } from '../live';
@@ -67,6 +67,8 @@ export default function EventEditorScreen({ navigation, route }: ScreenProps<'Ev
   const { calendarId, eventId, occurrence } = route.params;
   const { bump } = useCalendars();
   const cal = useCalendar(calendarId);
+  // A subscribed calendar's events are its link's: shown, never edited.
+  const readOnly = cal?.kind === 'subscribed';
   const [event, setEvent] = useState<CalEvent | null>(null);
   const [form, setForm] = useState<Form | null>(
     eventId
@@ -148,7 +150,9 @@ export default function EventEditorScreen({ navigation, route }: ScreenProps<'Ev
   // Someone else saved this event while it's open here (live updates).
   const [remote, setRemote] = useState<string | null>(null);
   useLiveChanges(calendarId, (c) => {
-    if (eventId && c.itemId === eventId) setRemote(c.byName || 'Someone');
+    // Read-only: there's nothing of yours to lose, so just show the new one.
+    if (readOnly) loadTheirs();
+    else if (eventId && c.itemId === eventId) setRemote(c.byName || 'Someone');
   });
   const loadTheirs = (current?: CalEvent) => {
     setRemote(null);
@@ -198,7 +202,9 @@ export default function EventEditorScreen({ navigation, route }: ScreenProps<'Ev
   useLayoutEffect(() => {
     navigation.setOptions({
       title: eventId ? 'Event' : 'New event',
-      headerRight: () => (saving ? <ActivityIndicator color={theme.primary} /> : <HeaderButton label="Save" onPress={save} />),
+      headerRight: readOnly
+        ? () => null
+        : () => (saving ? <ActivityIndicator color={theme.primary} /> : <HeaderButton label="Save" onPress={save} />),
     });
   });
 
@@ -207,6 +213,39 @@ export default function EventEditorScreen({ navigation, route }: ScreenProps<'Ev
       <View style={[styles.root, { justifyContent: 'center' }]}>
         {error ? <ErrorText error={error} /> : <ActivityIndicator color={theme.primary} />}
       </View>
+    );
+  }
+
+  if (readOnly && event) {
+    const repeat = event.rrule ? REPEATS.find((r) => r.id === event.rrule)?.label ?? 'Repeats' : '';
+    const sameDay = form.startDate === form.endDate;
+    const when = form.allDay
+      ? sameDay
+        ? `${formatDay(form.startDate, true)} · all day`
+        : `${formatDay(form.startDate, true)} – ${formatDay(form.endDate, true)}`
+      : sameDay
+        ? `${formatDay(form.startDate, true)} · ${form.startTime} – ${form.endTime}`
+        : `${formatDay(form.startDate, true)} ${form.startTime} – ${formatDay(form.endDate, true)} ${form.endTime}`;
+    return (
+      <ScrollView style={styles.root} contentContainerStyle={{ padding: 16, paddingBottom: 60, gap: 12 }}>
+        <ErrorText error={error} />
+        <View style={styles.pair}>
+          <Dot color={event.color || (cal ? displayColor(cal) : theme.textMuted)} />
+          <Text style={styles.viewTitle}>{event.title || '(no title)'}</Text>
+        </View>
+        <Text style={styles.viewText}>{when}</Text>
+        {repeat ? <Text style={styles.viewText}>{repeat}</Text> : null}
+        {event.location ? <Text style={styles.viewText}>{event.location}</Text> : null}
+        {event.url ? (
+          <Text style={[styles.viewText, { color: theme.primary }]} onPress={() => Linking.openURL(event.url).catch(() => {})}>
+            {event.url}
+          </Text>
+        ) : null}
+        {event.description ? <Text style={styles.viewText}>{event.description}</Text> : null}
+        <Muted style={{ fontSize: 13, marginTop: 8 }}>
+          From {cal?.name ?? 'a subscribed calendar'}, which follows a link, so its events change there and can't be edited here.
+        </Muted>
+      </ScrollView>
     );
   }
 
@@ -284,4 +323,6 @@ const makeStyles = (theme: Theme) =>
     label: { color: theme.textMuted, fontSize: 13, fontWeight: '600', marginTop: 4 },
     pair: { flexDirection: 'row', gap: 8 },
     time: { width: 96, textAlign: 'center' },
+    viewTitle: { color: theme.text, fontSize: 22, fontWeight: '700', flex: 1 },
+    viewText: { color: theme.text, fontSize: 16 },
   });

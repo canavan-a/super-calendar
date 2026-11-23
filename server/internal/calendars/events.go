@@ -241,8 +241,16 @@ func (s *Service) insertEvent(ctx context.Context, q execer, e *Event, userID st
 		all_day, start, end, tzid, rrule, exdates, cancelled, source, color, created_by, updated_by, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, e.CalendarID, e.UID, e.RecurrenceID, e.Title, e.Description, e.Location, e.URL,
-		e.AllDay, e.Start, e.End, e.TZID, e.RRule, string(exdates), e.Cancelled, e.Source, e.Color, userID, userID, now, now)
+		e.AllDay, e.Start, e.End, e.TZID, e.RRule, string(exdates), e.Cancelled, e.Source, e.Color, byUser(userID), byUser(userID), now, now)
 	return err
+}
+
+// byUser is who made a change, or NULL for the server itself (a feed sync).
+func byUser(userID string) any {
+	if userID == "" {
+		return nil
+	}
+	return userID
 }
 
 func (s *Service) saveEvent(ctx context.Context, q execer, e *Event, userID string) error {
@@ -250,7 +258,7 @@ func (s *Service) saveEvent(ctx context.Context, q execer, e *Event, userID stri
 	_, err := q.ExecContext(ctx, `UPDATE events SET title = ?, description = ?, location = ?, url = ?, all_day = ?,
 		start = ?, end = ?, tzid = ?, rrule = ?, exdates = ?, cancelled = ?, color = ?, updated_by = ?, updated_at = ?
 		WHERE id = ?`, e.Title, e.Description, e.Location, e.URL, e.AllDay, e.Start, e.End, e.TZID, e.RRule,
-		string(exdates), e.Cancelled, e.Color, userID, stamp(s.now()), e.ID)
+		string(exdates), e.Cancelled, e.Color, byUser(userID), stamp(s.now()), e.ID)
 	return err
 }
 

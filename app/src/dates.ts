@@ -121,3 +121,12 @@ export function daysCovered(start: string, end: string, allDay: boolean): DateSt
   for (let d = s; d <= e && out.length < 62; d = addDays(d, 1)) out.push(d);
   return out.length ? out : [s];
 }
+
+/** How long ago an instant was, roughly: "just now", "5 min ago", "3 h ago", or the day. */
+export function ago(iso: string, now = Date.now()): string {
+  const mins = Math.floor((now - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 24 * 60) return `${Math.floor(mins / 60)} h ago`;
+  return formatShort(localDate(iso));
+}

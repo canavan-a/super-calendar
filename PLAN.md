@@ -447,4 +447,211 @@ Each of these has a working default now; say if you want it changed.
 4. **Invites and the account cap:** yes, a pending invite lets that email sign
    up past the cap.
 5. **ICS:** one-time import (file, link, share sheet, webcal links) with
-   updates on re-import. Live subscriptions and export feeds wait for phase 6.
+   updates on re-import. Live subscriptions are planned as their own calendar
+   kind (§11); export feeds wait for phase 6.
+
+---
+
+## 11. Subscribed calendars (ICS links that keep updating)
+
+**Status (2026-11-23):** built as below. Server code is in
+`internal/calendars/feeds.go`, with tests in `internal/httpapi/feeds_test.go`
+and `internal/db/migrate_test.go`; app code is in `SubscribedScreen.tsx`, plus
+read-only modes in `GeneralScreen` and `EventEditorScreen`. Not yet tried on a
+phone or against a real Google or Outlook link.
+
+A fourth calendar kind, **Subscribed**, that follows an iCal link: Google's
+"Secret address in iCal format", an Outlook published calendar, or any
+`webcal://` feed. The server re-fetches it on a timer, and the calendar's
+events always match the feed exactly. Nobody can edit them in Super Calendar.
+One-time import into a general calendar (§4) stays as it is.
+
+This is one-way only: from the feed into Super Calendar. The export feed and
+two-way sync are separate work for later.
+
+### Rules
+
+- **Read-only, enforced by the server.** Only the sync job writes a
+  subscribed calendar's events. Event create, update and delete (including
+  "only this occurrence") and `/import` are not routed for the kind, so they
+  404, the same as any route for the wrong kind. The app also hides the
+  controls, but the server is what protects the data.
+- **Everything except the events can change:** the name, the shared colour,
+  each member's colour, whether it shows in Overview and its place in the
+  switcher, members, invites, leaving, the link itself, and Refresh now.
+- **Mirror the feed.** After a successful fetch and parse, add events that
+  are new, update changed ones (matched on UID plus RECURRENCE-ID) and delete
+  the ones that are gone, all in one transaction. Unlike import, nothing from
+  the app needs keeping, because nothing can be edited there.
+- **A failure never deletes anything.** A fetch error, a non-200 answer or a
+  file that won't parse leaves every event as it is and only records the
+  error. An empty feed only empties a calendar that has events once two
+  fetches in a row come back empty, in case a provider briefly serves an
+  empty file.
+- **The link is a secret.**
+  - It's kept in its own table, not in `calendars.settings`, which every
+    member receives.
+  - Only the member who added it sees the full link. Everyone else sees the
+    host ("calendar.google.com") and the sync status.
+  - Any member can **replace** the link, for when the person who added it has
+    left.
+  - It's never logged, and error messages show only the host.
+- **Shared like any other calendar.** Invites, leaving, and the last member
+  leaving deletes it. If the member who added the link leaves, the
+  subscription keeps working.
+
+### Data
+
+```sql
+-- 0004_subscribed.sql
+-- 1. The kind CHECK on calendars gains 'subscribed'. SQLite can't change a
+--    CHECK in place, so the table is rebuilt (see "Migration" below).
+-- 2. The feed for each subscribed calendar:
+CREATE TABLE calendar_feeds (
+    calendar_id    TEXT PRIMARY KEY REFERENCES calendars(id) ON DELETE CASCADE,
+    url            TEXT NOT NULL,              -- secret; https (webcal is rewritten)
+    added_by       TEXT REFERENCES users(id) ON DELETE SET NULL,
+    status         TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok', 'failing', 'broken')),
+    last_error     TEXT NOT NULL DEFAULT '',   -- fit to show; host only, never the URL
+    failures       INTEGER NOT NULL DEFAULT 0, -- in a row, for backoff
+    empty_fetches  INTEGER NOT NULL DEFAULT 0, -- in a row, for the empty-feed rule
+    etag           TEXT NOT NULL DEFAULT '',   -- conditional GET
+    last_modified  TEXT NOT NULL DEFAULT '',
+    body_hash      TEXT NOT NULL DEFAULT '',   -- skip writes when nothing changed
+    last_synced_at TEXT,                       -- last successful fetch
+    next_sync_at   TEXT NOT NULL,
+    created_at, updated_at
+);
+CREATE INDEX idx_calendar_feeds_next ON calendar_feeds(next_sync_at);
+```
+
+Events go in the existing `events` table with `source = 'ics'`, so that table
+needs no migration.
+
+**Migration (the risky part).** Connections run with `foreign_keys(ON)`, and
+there `DROP TABLE calendars` does an implicit `DELETE` that **cascades into
+every member, invite, event, session and cycle day**. The rebuild has to
+follow SQLite's documented 12-step procedure with foreign keys turned off.
+`PRAGMA foreign_keys` can't be changed inside a transaction, so
+`db.Migrate` needs a new marker (`-- +nofk`) that makes it:
+
+1. run `PRAGMA foreign_keys=OFF` before `BEGIN`,
+2. create `calendars_new`, copy the rows across, drop the old table and
+   rename the new one, then recreate the indexes and the
+   `calendar_last_member_gone` trigger,
+3. run `PRAGMA foreign_key_check`, failing the migration if any rows come
+   back,
+4. `COMMIT`, then `PRAGMA foreign_keys=ON`.
+
+The pool has a single connection (`SetMaxOpenConns(1)`), so the pragma
+applies to the connection doing the work. The test for this is a database
+filled with members, invites and every kind of item that comes through the
+migration intact.
+
+### Sync job
+
+- `go calendarService.RunFeedSync(ctx)` in `main.go`, alongside the auth
+  janitor. Once a minute it picks feeds whose `next_sync_at` has passed and
+  syncs them one at a time (SQLite has one writer anyway).
+- **Fetching** reuses `fetchICS`, with its public-addresses-only dialer,
+  redirect checks and webcal-to-https rewrite. Changes:
+  - limits of 20 MB and 20,000 events, and a 30 s timeout, for
+    subscriptions;
+  - `If-None-Match` / `If-Modified-Since`. A 304, or the same body hash,
+    counts as a successful sync with no writes;
+  - errors become a typed `FetchError{Status, Temporary}`, so the job can
+    tell a broken link from a passing failure.
+- **Schedule:**
+  - Success: the next sync is in 15 minutes.
+  - Passing failures (timeout, 5xx, a file that won't parse): status
+    `failing`, with backoff of 15 min, 30 min, 1 h, 2 h, then every 6 h.
+  - 401, 403, 404 or 410 (what a reset secret link returns): status
+    `broken`, retried once a day until the link is replaced.
+- **Live updates:** after a sync that changed something, the members are
+  sent `changed` with area `events` and no `By`. That needs a
+  `notifyCalendar(id, area)` helper, because `Notify` today only runs as
+  HTTP middleware. The app's banner shows "Updated from the link" when
+  there's no name.
+
+### API
+
+```
+POST /subscriptions/preview        {url} → {name, total, errors, sample}   (rate-limited)
+POST /calendars                    {kind:'subscribed', name, color, url}
+                                   creates the calendar and its feed, and syncs once
+                                   before answering, so it opens with events in it
+GET  /calendars/{id}/feed          {status, lastError, lastSyncedAt, eventCount,
+                                    host, url (only for whoever added it)}
+PUT  /calendars/{id}/feed          {url}  replace the link: fetched and checked first,
+                                   resets status; the replacer becomes added_by
+POST /calendars/{id}/feed/refresh  sync now (at most once a minute per calendar)
+GET  /calendars/{id}/events[/{eventID}]   routed for general AND subscribed
+```
+
+- `RequireKind` becomes variadic, so the event read routes take
+  `RequireKind(General, Subscribed)` while the write routes stay
+  `RequireKind(General)`.
+- The calendar JSON gains a `feed: {status, lastSyncedAt}` field for
+  subscribed calendars, so the switcher can mark a broken one without
+  another request.
+- In the Overview, a `subscribed` adapter emits kind `subscribed`, layer
+  `event`, by reusing `Occurrences`. `mail.go` gets a name for the kind
+  ("subscribed calendar").
+
+### App
+
+- **New calendar:** a fourth type, "Subscribed: follows a Google, Outlook or
+  iCal link; read-only". Picking it shows a link field with a short "Where's
+  my link?" guide for Google and Outlook. Then a preview (name filled from
+  `X-WR-CALNAME`, the event count and a few sample events), the colour, and
+  Create.
+- **Subscribed screen:** `GeneralScreen` with a `readOnly` mode: no + button
+  and no import menu items. Instead, a status line ("Synced 5 min ago ·
+  Refresh") and, when the link is broken, a banner ("This link stopped
+  working; it may have been reset") with **Paste new link**.
+- **Event view:** `EventEditorScreen` gets a read-only mode that shows the
+  fields as text, with a "From a subscribed calendar" note. "Copy to a
+  general calendar" comes later.
+- **Overview:** a Subscribed section in the Layers sheet. Tapping an item
+  opens the read-only view.
+- **Calendar settings:** a Link section showing the host or the full link
+  (for whoever added it), the status and last error, Replace link, and
+  Refresh now. Everything else is unchanged.
+- **Import:** when the source is a link (pasted, shared or `webcal`), offer
+  "Subscribe instead (keeps updating)" next to Import.
+- Every place the kind list is written out gets `'subscribed'`:
+  `api/calendars.ts`, `Switcher.tsx`, `navigation/types.ts`
+  (`routeForKind`), `OverviewScreen.tsx` and `NewCalendarScreen.tsx`.
+
+### Tests (server)
+
+- **Migration:** every row survives the calendars rebuild, and the
+  last-member trigger still works after it.
+- **Read-only:** POST, PATCH and DELETE on events (series and occurrence) and
+  `/import` all 404 on a subscribed calendar, while GETs work.
+- **Mirroring:** new, changed and removed events, overrides and
+  cancellations. An unchanged body or a 304 writes nothing. A failed fetch,
+  a 5xx or a file that won't parse keeps every event. A 404 marks the feed
+  broken. One empty feed changes nothing and a second one empties the
+  calendar.
+- **Secret link:** only `added_by` gets `url`. The link never appears in
+  `settings`, error messages or logs (a test on the redaction helper). A
+  non-member gets 404 on every `/feed` route.
+- **Scheduling:** backoff steps and the refresh-now rate limit, using the
+  injectable `s.now`, with the fake `fetcher` that tests already swap in.
+
+### Build order
+
+1. The migration runner's `-- +nofk` marker, plus `0004_subscribed.sql` and
+   its data-survival test.
+2. The kind: `validKind`, variadic `RequireKind`, the Overview adapter, mail
+   names, and the read-only route tests.
+3. Fetching: typed errors, conditional GET, the subscription limits, and
+   redaction.
+4. Sync: the mirror logic, the sync job, the schedule and backoff, and
+   `notifyCalendar`, with tests.
+5. The feed API: preview, create with a first sync, get, replace and
+   refresh.
+6. App: the kind plumbing, the New calendar flow, the read-only screen and
+   event view, the Overview layer, calendar settings, and "Subscribe
+   instead" on import.

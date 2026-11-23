@@ -3,7 +3,7 @@ import { apiJson } from './client';
 
 // Typed wrappers for the server's calendar API (server/internal/calendars).
 
-export type Kind = 'general' | 'training' | 'cycle';
+export type Kind = 'general' | 'training' | 'cycle' | 'subscribed';
 
 export type Calendar = {
   id: string;
@@ -16,6 +16,24 @@ export type Calendar = {
   settings: { weekStart?: 0 | 1; planStart?: DateStr };
   memberCount: number;
   createdAt: string;
+  /** Subscribed calendars only: how syncing their link is going. */
+  feed?: { status: FeedStatus; lastSyncedAt: string | null };
+};
+
+/** ok; failing (passing trouble, retried); broken (the link answers "gone", as a reset secret address does). */
+export type FeedStatus = 'ok' | 'failing' | 'broken';
+
+/** A subscribed calendar's link and sync status. Only whoever added the link is sent `url`. */
+export type Feed = {
+  status: FeedStatus;
+  lastError: string;
+  lastSyncedAt: string | null;
+  nextSyncAt: string;
+  eventCount: number;
+  host: string;
+  url?: string;
+  mine: boolean;
+  addedByName: string;
 };
 
 export const displayColor = (c: Calendar) => c.myColor ?? c.color;
@@ -49,6 +67,11 @@ export const api = {
   listCalendars: () => apiJson<{ calendars: Calendar[] }>('/calendars').then((r) => r.calendars),
   createCalendar: (kind: Kind, name: string, color: string) =>
     apiJson<{ calendar: Calendar }>('/calendars', json('POST', { kind, name, color })).then((r) => r.calendar),
+  createSubscribed: (name: string, color: string, url: string) =>
+    apiJson<{ calendar: Calendar }>(
+      '/calendars',
+      json('POST', { kind: 'subscribed', name, color, url: url.trim(), tz: timeZone() })
+    ).then((r) => r.calendar),
   reorder: (ids: string[]) => apiJson<void>('/calendars/order', json('PUT', { ids })),
   updateCalendar: (id: string, patch: { name?: string; color?: string; settings?: Record<string, unknown> }) =>
     apiJson<{ calendar: Calendar }>(cal(id), json('PATCH', patch)).then((r) => r.calendar),
@@ -91,6 +114,14 @@ export const api = {
     apiJson<ImportPreview>(`${cal(id)}/import/preview`, json('POST', { ...source, tz: timeZone() })),
   importIcs: (id: string, source: ImportSource) =>
     apiJson<ImportResult>(`${cal(id)}/import`, json('POST', { ...source, tz: timeZone() })),
+
+  // --- Subscribed ---
+  previewSubscription: (url: string) =>
+    apiJson<ImportPreview>('/subscriptions/preview', json('POST', { url: url.trim(), tz: timeZone() })),
+  feed: (id: string) => apiJson<{ feed: Feed }>(`${cal(id)}/feed`).then((r) => r.feed),
+  replaceFeedLink: (id: string, url: string) =>
+    apiJson<{ feed: Feed }>(`${cal(id)}/feed`, json('PUT', { url: url.trim(), tz: timeZone() })).then((r) => r.feed),
+  refreshFeed: (id: string) => apiJson<{ feed: Feed }>(`${cal(id)}/feed/refresh`, json('POST')).then((r) => r.feed),
 
   // --- Training ---
   activityTypes: (id: string) =>
@@ -157,6 +188,7 @@ export type UserSettings = {
 /** Layers each kind offers in the Overview, and whether they start on. */
 export const LAYERS: Record<Kind, { id: string; label: string; defaultOn: boolean }[]> = {
   general: [{ id: 'event', label: 'Events', defaultOn: true }],
+  subscribed: [{ id: 'event', label: 'Events', defaultOn: true }],
   training: [
     { id: 'planned', label: 'Planned', defaultOn: true },
     { id: 'done', label: 'Done', defaultOn: true },
@@ -322,6 +354,9 @@ export type CycleSummary = {
 /** The fertile window's colour, whatever the calendar's. */
 export const FERTILE_COLOR = '#74c0fc';
 
-export const KIND_LABEL: Record<Kind, string> = { general: 'General', training: 'Training', cycle: 'Cycle' };
+export const KIND_LABEL: Record<Kind, string> = { general: 'General', training: 'Training', cycle: 'Cycle', subscribed: 'Subscribed' };
+
+/** The kinds in the order lists show them. */
+export const KINDS: Kind[] = ['general', 'subscribed', 'training', 'cycle'];
 
 export const PALETTE = ['#2f81f7', '#1f9d55', '#e8590c', '#d6336c', '#7048e8', '#0c8599', '#f08c00', '#495057'];

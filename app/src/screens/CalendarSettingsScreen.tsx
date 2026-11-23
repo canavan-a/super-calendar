@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
-import { Invite, KIND_LABEL, Member, api } from '../api/calendars';
+import { Feed, Invite, KIND_LABEL, Member, api } from '../api/calendars';
 import { useAuth } from '../auth/AuthContext';
 import { ColorPicker, ErrorText, Muted, Row, SectionTitle, Segmented, ToggleRow } from '../components/kit';
 import { Button, TextField } from '../components/ui';
 import { useCalendar, useCalendars } from '../data/CalendarsContext';
 import { ScreenProps } from '../navigation/types';
+import { FeedBar } from './SubscribedScreen';
 import { Theme, useTheme, useThemedStyles } from '../theme';
 
 // Name, colours, members, invites and leaving. Everything here except "My
@@ -15,7 +16,7 @@ export default function CalendarSettingsScreen({ navigation, route }: ScreenProp
   const theme = useTheme();
   const { id } = route.params;
   const cal = useCalendar(id);
-  const { upsert, remove } = useCalendars();
+  const { upsert, remove, bump, refresh } = useCalendars();
   const { user } = useAuth();
   const [name, setName] = useState(cal?.name ?? '');
   const [members, setMembers] = useState<Member[]>([]);
@@ -24,19 +25,42 @@ export default function CalendarSettingsScreen({ navigation, route }: ScreenProp
   const [inviting, setInviting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [feed, setFeed] = useState<Feed | null>(null);
+  const [newLink, setNewLink] = useState('');
+  const [replacing, setReplacing] = useState(false);
+  const subscribed = cal?.kind === 'subscribed';
 
   const load = useCallback(async () => {
     try {
-      const [m, s] = await Promise.all([api.members(id), api.sentInvites(id)]);
+      const [m, s, f] = await Promise.all([api.members(id), api.sentInvites(id), subscribed ? api.feed(id) : Promise.resolve(null)]);
       setMembers(m);
       setSent(s);
+      setFeed(f);
     } catch (e: any) {
       setError(e.message);
     }
-  }, [id]);
+  }, [id, subscribed]);
   useEffect(() => {
     load();
   }, [load]);
+
+  // A new link is fetched and checked by the server before it replaces the old one.
+  const replaceLink = async () => {
+    setReplacing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      setFeed(await api.replaceFeedLink(id, newLink));
+      setNewLink('');
+      setNotice('Link replaced and synced.');
+      bump(id);
+      refresh();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setReplacing(false);
+    }
+  };
 
   if (!cal) return <View style={styles.root} />;
 
@@ -122,6 +146,38 @@ export default function CalendarSettingsScreen({ navigation, route }: ScreenProp
             />
           </View>
           <Row label="Activities" detail="The activity types sessions use" onPress={() => navigation.navigate('ActivityTypes', { calendarId: id })} />
+        </>
+      ) : null}
+
+      {subscribed ? (
+        <>
+          <SectionTitle>Link</SectionTitle>
+          <FeedBar id={id} feed={feed} onFeed={setFeed} />
+          {feed ? (
+            <Row
+              label={feed.mine && feed.url ? feed.url : feed.host || 'A calendar link'}
+              detail={
+                feed.mine
+                  ? 'Only you see the whole link. Treat it like a password.'
+                  : `Added by ${feed.addedByName || 'someone who has left'}. Only they see the whole link.`
+              }
+            />
+          ) : null}
+          <Muted style={{ paddingHorizontal: 16, marginTop: 4 }}>
+            Was the link reset, or should this follow another calendar? Paste the new link; it's checked before it replaces this one.
+          </Muted>
+          <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, marginTop: 8 }}>
+            <TextField
+              value={newLink}
+              onChangeText={setNewLink}
+              placeholder="New link"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              style={{ flex: 1 }}
+            />
+            <Button label="Replace" onPress={replaceLink} loading={replacing} disabled={!newLink.trim()} />
+          </View>
         </>
       ) : null}
 

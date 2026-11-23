@@ -3,6 +3,7 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 import {
   Calendar,
   KIND_LABEL,
+  KINDS,
   Kind,
   LAYERS,
   OverviewItem,
@@ -117,7 +118,7 @@ export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) 
   );
 
   const openItem = (it: OverviewItem) => {
-    if (it.kind === 'general' && it.refId) {
+    if ((it.kind === 'general' || it.kind === 'subscribed') && it.refId) {
       navigation.navigate('EventEditor', { calendarId: it.calendarId, eventId: it.refId, occurrence: it.occurrence || undefined });
     } else if (it.kind === 'training' && it.refId) {
       navigation.navigate('SessionEditor', { calendarId: it.calendarId, sessionId: it.refId });
@@ -138,7 +139,7 @@ export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) 
       <View style={styles.empty}>
         <Text style={styles.emptyTitle}>No calendars yet</Text>
         <Muted style={{ textAlign: 'center', marginBottom: 20 }}>
-          Make a general, training or cycle calendar, or accept an invite from someone who shared one with you.
+          Make a general, training or cycle calendar, subscribe to a Google or Outlook one, or accept an invite from someone who shared one with you.
         </Muted>
         <Button label="New calendar" onPress={() => navigation.navigate('NewCalendar')} style={{ alignSelf: 'stretch' }} />
         <View style={{ height: 10 }} />
@@ -200,10 +201,9 @@ function LayersSheet({
       ...settings,
       overview: { ...settings.overview, layers: { ...settings.overview?.layers, [`${k}/${layer}`]: on } },
     });
-  const kinds: Kind[] = ['general', 'training', 'cycle'];
   return (
     <Sheet visible={visible} onClose={onClose} title="Layers">
-      {kinds.map((k) => {
+      {KINDS.map((k) => {
         const list = calendars.filter((c) => c.kind === k);
         if (!list.length) return null;
         const on = kindOn(settings, k);

@@ -109,6 +109,14 @@ export default function ImportScreen({ navigation, route }: ScreenProps<'Import'
           </Text>
         </Muted>
       )}
+      {source?.url ? (
+        <Row
+          label="Subscribe instead"
+          detail="A calendar of its own that keeps updating from this link (read-only), rather than a copy of it now"
+          left={<Text style={{ fontSize: 20, width: 24, color: theme.text }}>⟳</Text>}
+          onPress={() => navigation.navigate('NewCalendar', { kind: 'subscribed', url: source.url })}
+        />
+      ) : null}
 
       <SectionTitle>Into</SectionTitle>
       {general.length === 0 ? (

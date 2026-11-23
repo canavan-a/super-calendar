@@ -15,7 +15,7 @@ type Item struct {
 	CalendarID string `json:"calendarId"`
 	Kind       string `json:"kind"`
 	// Which switchable layer of its kind it belongs to:
-	//   general:  event
+	//   general, subscribed:  event
 	//   training: planned, done, skipped
 	//   cycle:    period (a logged day), predicted, fertile
 	Layer      string `json:"layer"`
@@ -42,9 +42,10 @@ type Item struct {
 type adapter func(ctx context.Context, s *Service, cals []*Calendar, r Range) ([]Item, error)
 
 var adapters = map[string]adapter{
-	General:  generalItems,
-	Training: trainingItems,
-	Cycle:    cycleItems,
+	General:    eventItems(General),
+	Training:   trainingItems,
+	Cycle:      cycleItems,
+	Subscribed: eventItems(Subscribed),
 }
 
 // Overview overlays every calendar userID has switched on for the Overview.
@@ -82,19 +83,23 @@ func ids(cals []*Calendar) ([]string, map[string]*Calendar) {
 	return out, m
 }
 
-func generalItems(ctx context.Context, s *Service, cals []*Calendar, r Range) ([]Item, error) {
-	idList, byID := ids(cals)
-	occs, err := s.Occurrences(ctx, idList, r)
-	if err != nil {
-		return nil, err
+// eventItems is the adapter for the kinds made of events: general and
+// subscribed calendars.
+func eventItems(kind string) adapter {
+	return func(ctx context.Context, s *Service, cals []*Calendar, r Range) ([]Item, error) {
+		idList, byID := ids(cals)
+		occs, err := s.Occurrences(ctx, idList, r)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]Item, 0, len(occs))
+		for _, o := range occs {
+			out = append(out, Item{CalendarID: o.CalendarID, Kind: kind, Layer: "event", AllDay: o.AllDay,
+				Start: o.Start, End: o.End, Title: o.Title, Color: eventColor(o.Color, byID[o.CalendarID]),
+				RefID: o.EventID, Occurrence: o.Occurrence})
+		}
+		return out, nil
 	}
-	out := make([]Item, 0, len(occs))
-	for _, o := range occs {
-		out = append(out, Item{CalendarID: o.CalendarID, Kind: General, Layer: "event", AllDay: o.AllDay,
-			Start: o.Start, End: o.End, Title: o.Title, Color: eventColor(o.Color, byID[o.CalendarID]),
-			RefID: o.EventID, Occurrence: o.Occurrence})
-	}
-	return out, nil
 }
 
 func trainingItems(ctx context.Context, s *Service, cals []*Calendar, r Range) ([]Item, error) {

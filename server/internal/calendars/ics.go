@@ -48,30 +48,79 @@ type ImportResult struct {
 	Errors   []string `json:"errors"`
 }
 
+// FetchRequest asks for a calendar link. ETag and LastModified, from an
+// earlier fetch, make it conditional: an unchanged feed answers NotModified.
+type FetchRequest struct {
+	URL          string
+	ETag         string
+	LastModified string
+	MaxBytes     int64
+	Timeout      time.Duration
+}
+
+type FetchResponse struct {
+	Body         string
+	NotModified  bool
+	ETag         string
+	LastModified string
+}
+
+// FetchError is a link that couldn't be downloaded. Status is what the
+// server answered (0 if it never did). Msg is fit to show and never contains
+// the link itself, which for a subscription is a secret.
+type FetchError struct {
+	Status int
+	Msg    string
+}
+
+func (e *FetchError) Error() string { return e.Msg }
+
+// Gone reports whether the link itself is dead, as a reset secret address
+// is, rather than its server having a bad moment.
+func (e *FetchError) Gone() bool {
+	switch e.Status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusGone:
+		return true
+	}
+	return false
+}
+
 // Fetcher downloads a calendar link. Tests swap it out.
-type Fetcher func(ctx context.Context, rawURL string) (string, error)
+type Fetcher func(ctx context.Context, req FetchRequest) (*FetchResponse, error)
+
+// UseFetcher replaces how links are downloaded (tests only).
+func (s *Service) UseFetcher(f Fetcher) { s.fetcher = f }
 
 func (s *Service) parseImport(ctx context.Context, calendarID string, req ImportRequest) (string, []*Event, []string, error) {
 	text := req.ICS
 	if text == "" && req.URL != "" {
-		var err error
-		if text, err = s.fetch(ctx, req.URL); err != nil {
+		res, err := s.fetch(ctx, FetchRequest{URL: req.URL, MaxBytes: maxICSBytes, Timeout: fetchTimeout})
+		if err != nil {
 			return "", nil, nil, err
 		}
+		text = res.Body
 	}
 	if strings.TrimSpace(text) == "" {
 		return "", nil, nil, invalid("there's no calendar to import")
 	}
-	loc := time.UTC
-	if l, err := time.LoadLocation(req.TZ); err == nil && req.TZ != "" {
-		loc = l
+	return parseICS(text, calendarID, loadLoc(req.TZ), maxICSEvents)
+}
+
+// loadLoc is the zone named tz, or UTC.
+func loadLoc(tz string) *time.Location {
+	if l, err := time.LoadLocation(tz); err == nil && tz != "" {
+		return l
 	}
-	return ParseICS(text, calendarID, loc)
+	return time.UTC
 }
 
 // ParseICS turns iCalendar text into events (not yet saved). Events that
 // can't be read are reported in errs and left out.
 func ParseICS(text, calendarID string, defaultLoc *time.Location) (name string, events []*Event, errs []string, err error) {
+	return parseICS(text, calendarID, defaultLoc, maxICSEvents)
+}
+
+func parseICS(text, calendarID string, defaultLoc *time.Location, maxEvents int) (name string, events []*Event, errs []string, err error) {
 	cal, err := ics.ParseCalendar(strings.NewReader(text))
 	if err != nil {
 		return "", nil, nil, invalid("that isn't a calendar file (%v)", err)
@@ -83,8 +132,8 @@ func ParseICS(text, calendarID string, defaultLoc *time.Location) (name string, 
 	}
 	errs = []string{}
 	for i, ve := range cal.Events() {
-		if len(events) >= maxICSEvents {
-			errs = append(errs, fmt.Sprintf("only the first %d events were read", maxICSEvents))
+		if len(events) >= maxEvents {
+			errs = append(errs, fmt.Sprintf("only the first %d events were read", maxEvents))
 			break
 		}
 		e, err := fromVEvent(ve, calendarID, defaultLoc)
@@ -401,11 +450,40 @@ func (s *Service) Import(ctx context.Context, calendarID, userID string, req Imp
 
 // --- Fetching links ---
 
-func (s *Service) fetch(ctx context.Context, rawURL string) (string, error) {
-	if s.fetcher != nil {
-		return s.fetcher(ctx, rawURL)
+func (s *Service) fetch(ctx context.Context, req FetchRequest) (*FetchResponse, error) {
+	if _, err := linkURL(req.URL); err != nil {
+		return nil, err
 	}
-	return fetchICS(ctx, rawURL)
+	if s.fetcher != nil {
+		return s.fetcher(ctx, req)
+	}
+	return fetchICS(ctx, req)
+}
+
+// linkURL checks a calendar link and returns it with webcal made https.
+func linkURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return nil, invalid("that isn't a link")
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "webcal", "webcals", "https":
+		u.Scheme = "https"
+	case "http":
+		u.Scheme = "http"
+	default:
+		return nil, invalid("only web and webcal links work here")
+	}
+	return u, nil
+}
+
+// linkHost is the part of a link that's safe to show: who serves it, not the
+// secret path.
+func linkHost(raw string) string {
+	if u, err := linkURL(raw); err == nil {
+		return u.Hostname()
+	}
+	return ""
 }
 
 var errPrivateAddress = errors.New("that address isn't on the public internet")
@@ -429,8 +507,8 @@ func publicOnly(network, address string, _ syscall.RawConn) error {
 	return nil
 }
 
+// fetchClient has no overall timeout of its own: each FetchRequest brings one.
 var fetchClient = &http.Client{
-	Timeout: fetchTimeout,
 	Transport: &http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 5 * time.Second, Control: publicOnly}).DialContext,
 		TLSHandshakeTimeout: 5 * time.Second,
@@ -447,27 +525,33 @@ var fetchClient = &http.Client{
 	},
 }
 
-func fetchICS(ctx context.Context, rawURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || u.Host == "" {
-		return "", invalid("that isn't a link")
+// fetchICS downloads a link. Its errors never include the link: a
+// subscription's is a secret, and these messages are shown and logged.
+func fetchICS(ctx context.Context, fr FetchRequest) (*FetchResponse, error) {
+	u, err := linkURL(fr.URL)
+	if err != nil {
+		return nil, err
 	}
-	scheme := strings.ToLower(u.Scheme)
-	switch scheme {
-	case "webcal", "webcals", "https":
-		u.Scheme = "https"
-	case "http":
-	default:
-		return "", invalid("only web and webcal links can be imported")
+	if fr.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, fr.Timeout)
+		defer cancel()
 	}
+	webcal := strings.HasPrefix(strings.ToLower(strings.TrimSpace(fr.URL)), "webcal:")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return "", invalid("that isn't a link")
+		return nil, invalid("that isn't a link")
 	}
 	req.Header.Set("Accept", "text/calendar, */*;q=0.5")
 	req.Header.Set("User-Agent", "SuperCalendar/1")
+	if fr.ETag != "" {
+		req.Header.Set("If-None-Match", fr.ETag)
+	}
+	if fr.LastModified != "" {
+		req.Header.Set("If-Modified-Since", fr.LastModified)
+	}
 	resp, err := fetchClient.Do(req)
-	if err != nil && scheme == "webcal" && !errors.Is(err, errPrivateAddress) {
+	if err != nil && webcal && !errors.Is(err, errPrivateAddress) {
 		// Some webcal feeds are only served over plain http.
 		u.Scheme = "http"
 		req.URL = u
@@ -475,22 +559,32 @@ func fetchICS(ctx context.Context, rawURL string) (string, error) {
 	}
 	if err != nil {
 		if errors.Is(err, errPrivateAddress) {
-			return "", invalid("%v", errPrivateAddress)
+			return nil, &FetchError{Msg: errPrivateAddress.Error()}
 		}
-		return "", invalid("couldn't download that link")
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, &FetchError{Msg: "the link took too long to answer"}
+		}
+		return nil, &FetchError{Msg: "couldn't download that link"}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotModified && (fr.ETag != "" || fr.LastModified != "") {
+		return &FetchResponse{NotModified: true, ETag: fr.ETag, LastModified: fr.LastModified}, nil
+	}
 	if resp.StatusCode != http.StatusOK {
-		return "", invalid("the link answered %d", resp.StatusCode)
+		return nil, &FetchError{Status: resp.StatusCode, Msg: fmt.Sprintf("the link answered %d", resp.StatusCode)}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxICSBytes+1))
+	max := fr.MaxBytes
+	if max <= 0 {
+		max = maxICSBytes
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
 	if err != nil {
-		return "", invalid("couldn't download that link")
+		return nil, &FetchError{Msg: "couldn't download that link"}
 	}
-	if len(body) > maxICSBytes {
-		return "", invalid("that calendar is over 5 MB")
+	if int64(len(body)) > max {
+		return nil, &FetchError{Msg: fmt.Sprintf("that calendar is over %d MB", max>>20)}
 	}
-	return string(body), nil
+	return &FetchResponse{Body: string(body), ETag: resp.Header.Get("ETag"), LastModified: resp.Header.Get("Last-Modified")}, nil
 }
 
 func union(a, b []string) []string {
