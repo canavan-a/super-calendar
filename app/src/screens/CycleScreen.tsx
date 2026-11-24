@@ -210,7 +210,7 @@ function SummaryCard({ summary, color }: { summary: CycleSummary; color: string 
   );
 }
 
-function DaySheet({
+export function DaySheet({
   date,
   day,
   onClose,

@@ -1,5 +1,5 @@
-import React, { memo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { memo, useRef } from 'react';
+import { PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { DateStr, addMonths, dayOfMonth, formatMonth, monthGrid, today, weekdayLabels } from '../dates';
 import { Theme, useTheme, useThemedStyles } from '../theme';
 
@@ -26,8 +26,11 @@ export const MonthGrid = memo(function MonthGrid({
   onSelect,
   onMonthChange,
   detailed,
+  swipeable,
 }: {
   month: DateStr;
+  /** Swipe left or right across the grid to go to the next or previous month. */
+  swipeable?: boolean;
   /** Taller cells listing each day's items (chips) instead of dots. */
   detailed?: boolean;
   weekStart?: 0 | 1;
@@ -41,8 +44,9 @@ export const MonthGrid = memo(function MonthGrid({
   const days = monthGrid(month, weekStart);
   const thisMonth = month.slice(0, 7);
   const now = today();
+  const swipe = useMonthSwipe(month, onMonthChange);
   return (
-    <View>
+    <View {...(swipeable ? swipe.panHandlers : null)}>
       <View style={styles.header}>
         <Pressable hitSlop={12} onPress={() => onMonthChange(addMonths(month, -1))} style={styles.arrow}>
           <Text style={styles.arrowText}>‹</Text>
@@ -118,6 +122,24 @@ export const MonthGrid = memo(function MonthGrid({
     </View>
   );
 });
+
+// A mostly-sideways drag takes over from the day cells and the page's vertical
+// scroll; letting go past a short distance (or with a flick) turns the month.
+function useMonthSwipe(month: DateStr, onMonthChange: (m: DateStr) => void) {
+  const latest = useRef({ month, onMonthChange });
+  latest.current = { month, onMonthChange };
+  return useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponderCapture: (_, g) => Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 2,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderRelease: (_, g) => {
+        if (Math.abs(g.dx) < 50 && Math.abs(g.vx) < 0.3) return;
+        const { month: m, onMonthChange: change } = latest.current;
+        change(addMonths(m, g.dx < 0 ? 1 : -1));
+      },
+    })
+  ).current;
+}
 
 const MAX_CHIPS = 3;
 

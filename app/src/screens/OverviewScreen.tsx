@@ -10,12 +10,14 @@ import {
   UserSettings,
   api,
   FERTILE_COLOR,
+  Flow,
   displayColor,
   kindOn,
   layerOn,
 } from '../api/calendars';
 import { Button } from '../components/ui';
-import { Dot, HeaderButton, Muted, Row, SectionTitle, Sheet, ToggleRow } from '../components/kit';
+import { Dot, Fab, HeaderButton, Muted, Row, SectionTitle, Sheet, ToggleRow } from '../components/kit';
+import { DaySheet } from './CycleScreen';
 import { DayMarks, MonthGrid } from '../components/MonthGrid';
 import { useCalendars } from '../data/CalendarsContext';
 import { DateStr, daysCovered, formatDay, localTime, monthGrid, addDays, today, startOfMonth } from '../dates';
@@ -47,13 +49,15 @@ const FLOW_STRENGTH: Record<string, number> = { spotting: 0.15, light: 0.4, medi
 // sheet switches whole types, single calendars, and layers within a type.
 export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) {
   const styles = useThemedStyles(makeStyles);
-  const { calendars, settings, setSettings, upsert, version, refresh, loaded } = useCalendars();
+  const { calendars, settings, setSettings, upsert, version, refresh, loaded, bump } = useCalendars();
   const [month, setMonth] = useState(startOfMonth(today()));
-  const [selected, setSelected] = useState<DateStr>(today());
+  const [selected, setSelected] = useState<DateStr | null>(today());
   const [items, setItems] = useState<OverviewItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [layersOpen, setLayersOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [logging, setLogging] = useState<{ calendarId: string; date: DateStr } | null>(null);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -84,11 +88,21 @@ export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) 
     [items, settings]
   );
 
+  // Days with a logged period: a prediction never draws over one.
+  const loggedDays = useMemo(() => {
+    const s = new Set<DateStr>();
+    for (const it of visible) {
+      if (it.kind === 'cycle' && it.layer === 'period') daysCovered(it.start, it.end, it.allDay).forEach((d) => s.add(d));
+    }
+    return s;
+  }, [visible]);
+
   const marks = useMemo(() => {
     const m: Record<DateStr, DayMarks> = {};
     const at = (d: DateStr) => (m[d] ??= {});
     for (const it of sortItems(visible)) {
       for (const d of daysCovered(it.start, it.end, it.allDay)) {
+        if (it.kind === 'cycle' && it.layer === 'predicted' && loggedDays.has(d)) continue;
         const mk = at(d);
         if (it.kind === 'cycle') {
           if (it.layer === 'period') {
@@ -109,11 +123,47 @@ export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) 
       }
     }
     return m;
-  }, [visible]);
+  }, [visible, loggedDays]);
+
+  // What "+" can add to the selected day (today if none): an event on any
+  // general calendar, or a period on a cycle calendar shown here that hasn't
+  // logged that day yet.
+  const addDay = selected ?? today();
+  const addOptions = useMemo(() => {
+    const logged = new Set(
+      items
+        .filter((it) => it.kind === 'cycle' && it.layer === 'period' && daysCovered(it.start, it.end, it.allDay).includes(addDay))
+        .map((it) => it.calendarId)
+    );
+    return [
+      ...calendars.filter((c) => c.kind === 'general').map((c) => ({ cal: c, cycle: false })),
+      ...calendars
+        .filter((c) => c.kind === 'cycle' && c.inOverview && kindOn(settings, 'cycle') && !logged.has(c.id))
+        .map((c) => ({ cal: c, cycle: true })),
+    ];
+  }, [calendars, items, settings, addDay]);
+
+  const addTo = (o: { cal: Calendar; cycle: boolean }) => {
+    setAddOpen(false);
+    if (o.cycle) setLogging({ calendarId: o.cal.id, date: addDay });
+    else navigation.navigate('EventEditor', { calendarId: o.cal.id, date: addDay });
+  };
+
+  const logPeriod = async (calendarId: string, date: DateStr, flow: Flow, notes: string) => {
+    setLogging(null);
+    if (flow === 'none' && !notes) return;
+    try {
+      await api.putCycleDay(calendarId, date, flow, notes);
+      bump(calendarId);
+      load();
+    } catch (e: any) {
+      setError(e.message ?? "Couldn't log that day");
+    }
+  };
 
   const dayItems = useMemo(
     () =>
-      sortItems(visible.filter((it) => daysCovered(it.start, it.end, it.allDay).includes(selected))),
+      selected ? sortItems(visible.filter((it) => daysCovered(it.start, it.end, it.allDay).includes(selected))) : [],
     [visible, selected]
   );
 
@@ -151,15 +201,44 @@ export default function OverviewScreen({ navigation }: ScreenProps<'Overview'>) 
   return (
     <View style={styles.root}>
       <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={() => { refresh(); load(); }} />}>
-        <MonthGrid detailed month={month} selected={selected} marks={marks} onSelect={setSelected} onMonthChange={(m) => { setMonth(startOfMonth(m)); }} />
+        <MonthGrid
+          detailed
+          swipeable
+          month={month}
+          selected={selected}
+          marks={marks}
+          onSelect={(d) => setSelected((cur) => (cur === d ? null : d))}
+          onMonthChange={(m) => { setMonth(startOfMonth(m)); }}
+        />
         {error ? <Muted style={{ padding: 16 }}>{error}</Muted> : null}
-        <SectionTitle>{formatDay(selected, true)}</SectionTitle>
-        {dayItems.length === 0 ? <Muted style={{ paddingHorizontal: 16 }}>Nothing on this day.</Muted> : null}
+        {selected ? <SectionTitle>{formatDay(selected, true)}</SectionTitle> : null}
+        {selected && dayItems.length === 0 ? <Muted style={{ paddingHorizontal: 16 }}>Nothing on this day.</Muted> : null}
         {dayItems.map((it, i) => (
           <Row key={i} label={it.title} detail={describe(it)} left={<Dot color={it.color} />} onPress={() => openItem(it)} />
         ))}
-        <View style={{ height: 40 }} />
+        <View style={{ height: 100 }} />
       </ScrollView>
+      {addOptions.length > 0 ? (
+        <Fab onPress={() => (addOptions.length === 1 ? addTo(addOptions[0]) : setAddOpen(true))} />
+      ) : null}
+      <Sheet visible={addOpen} onClose={() => setAddOpen(false)} title={`Add to ${formatDay(addDay)}`}>
+        {addOptions.map((o) => (
+          <Row
+            key={o.cal.id}
+            label={o.cycle ? `Log period · ${o.cal.name}` : o.cal.name}
+            detail={o.cycle ? 'Cycle' : 'New event'}
+            left={<Dot color={displayColor(o.cal)} />}
+            onPress={() => addTo(o)}
+          />
+        ))}
+      </Sheet>
+      {logging ? (
+        <DaySheet
+          date={logging.date}
+          onClose={() => setLogging(null)}
+          onSave={(date, flow, notes) => logPeriod(logging.calendarId, date, flow, notes)}
+        />
+      ) : null}
       <LayersSheet
         visible={layersOpen}
         onClose={() => setLayersOpen(false)}
